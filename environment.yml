@@ -1,0 +1,14 @@
+name: pka_predictor
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python>=3.9
+  - rdkit
+  - xtb
+  - xtb-python
+  - scikit-learn
+  - xgboost
+  - pandas
+  - tqdm
+  - pip
