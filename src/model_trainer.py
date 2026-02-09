@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import os
 from rdkit import Chem
 from rdkit.Chem import AllChem
 from rdkit import DataStructs
@@ -171,3 +172,68 @@ class ModelTrainer:
         
         joblib.dump(model_pkg, save_path)
         logger.info(f"Full model package saved to {save_path}")
+
+    def load_model(self, path: str):
+        """
+        Load a trained model package.
+        """
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Model file not found at {path}")
+            
+        model_pkg = joblib.load(path)
+        self.model = model_pkg['model']
+        self.scaler = model_pkg['scaler']
+        self.fp_radius = model_pkg.get('fp_radius', self.fp_radius)
+        self.fp_bits = model_pkg.get('fp_bits', self.fp_bits)
+        self.feature_keys = model_pkg.get('feature_keys', self.feature_keys)
+        
+        logger.info(f"Model loaded from {path}")
+
+    def predict(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Generate predictions for new data.
+        Returns a list of dicts with 'id', 'smiles', 'predicted_pka'.
+        """
+        smiles = []
+        ids = []
+        phys_feats = []
+        valid_entries = []
+        
+        for entry in data:
+            if 'smiles' not in entry:
+                continue
+            
+            # Check features
+            if not all(k in entry for k in self.feature_keys):
+                continue
+                
+            smiles.append(entry['smiles'])
+            ids.append(entry.get('id', 'unknown'))
+            
+            feat_vec = [float(entry[k]) for k in self.feature_keys]
+            phys_feats.append(feat_vec)
+            valid_entries.append(entry)
+            
+        if not smiles:
+            return []
+            
+        # Generate fingerprints
+        X_fp = self.generate_fingerprints(smiles)
+        
+        # Scale physical features (transform only)
+        X_phys = np.array(phys_feats)
+        X_phys_scaled = self.scaler.transform(X_phys)
+        
+        # Concatenate
+        X = np.hstack([X_fp, X_phys_scaled])
+        
+        # Predict
+        preds = self.model.predict(X)
+        
+        results = []
+        for i, pred in enumerate(preds):
+            res = valid_entries[i].copy()
+            res['predicted_pka'] = float(pred)
+            results.append(res)
+            
+        return results

@@ -116,7 +116,18 @@ def main():
     if 'id' not in df.columns:
         df['id'] = [f"mol_{i}" for i in range(len(df))]
         
-    required_cols = ['smiles', 'pka']
+    # Determine Mode
+    mode = 'train'
+    if 'pka' not in df.columns:
+        mode = 'predict'
+        logger.info("No 'pka' column found. Switching to PREDICTION mode.")
+    else:
+        logger.info("Found 'pka' column. Running in TRAINING mode.")
+
+    required_cols = ['smiles']
+    if mode == 'train':
+        required_cols.append('pka')
+        
     if not all(col in df.columns for col in required_cols):
         logger.error(f"Input CSV must contain columns: {required_cols}")
         return
@@ -193,28 +204,59 @@ def main():
         logger.info(f"Successfully processed {total_new_processed} new molecules.")
         
         # Reload full dataset for training
-        processed_data = pd.read_csv(partial_file).to_dict('records')
+        if os.path.exists(partial_file):
+            processed_data = pd.read_csv(partial_file).to_dict('records')
+        else:
+            logger.error("No processed data found. Calculation failed for all molecules.")
+            return
 
     if not processed_data:
         logger.error("No valid data available for training. Exiting.")
         return
 
-    # 3. Model Training
-    logger.info("Starting model training...")
+    # 3. Model Training or Prediction
     trainer = ModelTrainer()
-    
-    try:
-        X, y = trainer.prepare_data(processed_data)
+
+    if mode == 'train':
+        logger.info("Starting model training...")
         
-        # Evaluate
-        trainer.evaluate(X, y)
-        
-        # Final Train and Save
-        os.makedirs(os.path.dirname(args.model_path), exist_ok=True)
-        trainer.train_final_model(X, y, save_path=args.model_path)
-        
-    except Exception as e:
-        logger.error(f"Model training failed: {e}")
+        try:
+            X, y = trainer.prepare_data(processed_data)
+            
+            # Evaluate
+            trainer.evaluate(X, y)
+            
+            # Final Train and Save
+            os.makedirs(os.path.dirname(args.model_path), exist_ok=True)
+            trainer.train_final_model(X, y, save_path=args.model_path)
+            
+        except Exception as e:
+            logger.error(f"Model training failed: {e}")
+            
+    else:
+        logger.info("Starting prediction...")
+        try:
+            if not os.path.exists(args.model_path):
+                logger.error(f"Model file not found at {args.model_path}. Cannot predict without a trained model.")
+                return
+
+            trainer.load_model(args.model_path)
+            predictions = trainer.predict(processed_data)
+            
+            if predictions:
+                pred_df = pd.DataFrame(predictions)
+                
+                # Construct output path
+                base, ext = os.path.splitext(args.data)
+                output_path = f"{base}_predictions{ext}"
+                
+                pred_df.to_csv(output_path, index=False)
+                logger.info(f"Predictions saved to {output_path}")
+            else:
+                logger.warning("No predictions generated.")
+                
+        except Exception as e:
+            logger.error(f"Prediction failed: {e}")
 
 if __name__ == "__main__":
     # Windows support for multiprocessing

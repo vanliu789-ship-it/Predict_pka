@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Conda
+.conda/
+.conda_envs/
+
+# Project specific
+data/
+temp/
+test_output/
+models/
+project.log
+*.log
+*.xyz
+NOT_CONVERGED
+debug_output.txt
+run_output.txt
+
+# IDE
+.vscode/
+.idea/
+.trae/

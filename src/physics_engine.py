@@ -21,11 +21,22 @@ class PhysicsEngine:
             work_dir: Directory for temporary xtb files.
         """
         self.xtb_path = xtb_path
+        
+        # Auto-detect xtb in Conda environment on Windows if not found in PATH
+        if shutil.which(self.xtb_path) is None and os.name == 'nt':
+            # Try standard Conda Library/bin path
+            conda_prefix = os.environ.get('CONDA_PREFIX')
+            if conda_prefix:
+                potential_path = os.path.join(conda_prefix, 'Library', 'bin', 'xtb.exe')
+                if os.path.exists(potential_path):
+                    self.xtb_path = potential_path
+                    logger.info(f"Auto-detected xtb at: {self.xtb_path}")
+
         self.work_dir = work_dir
         os.makedirs(self.work_dir, exist_ok=True)
         
         # Verify xtb availability
-        if shutil.which(self.xtb_path) is None:
+        if shutil.which(self.xtb_path) is None and not os.path.exists(self.xtb_path):
             logger.warning(f"xtb executable not found at {self.xtb_path}. Ensure it is installed and in PATH.")
 
     def run_calculation(self, xyz_file: str, mol_id: str, charge: int = 0, uhf: int = 0) -> Optional[Dict[str, float]]:
@@ -61,6 +72,7 @@ class PhysicsEngine:
         env = os.environ.copy()
         env["OMP_NUM_THREADS"] = "1"
         env["MKL_NUM_THREADS"] = "1"
+        env["OMP_STACKSIZE"] = "2000M"  # Use 'M' suffix for compatibility
         
         try:
             # Run xtb
