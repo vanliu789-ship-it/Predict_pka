@@ -185,10 +185,23 @@ def main():
                 if len(batch_results) >= args.chunk_size:
                     df_batch = pd.DataFrame(batch_results)
                     
-                    # Append to CSV
-                    # If file doesn't exist (first batch of first run), write header.
-                    # If file exists (resuming or subsequent batch), append without header.
-                    header = not os.path.exists(partial_file)
+                    # Append to CSV with column alignment
+                    if os.path.exists(partial_file):
+                        try:
+                            # Read existing header to ensure column alignment
+                            existing_cols = pd.read_csv(partial_file, nrows=0).columns.tolist()
+                            # Reindex to match existing columns (adds NaNs if missing, drops extras if not in file)
+                            df_batch = df_batch.reindex(columns=existing_cols)
+                            header = False
+                        except pd.errors.EmptyDataError:
+                            # File exists but empty? Treat as new.
+                            header = True
+                        except Exception as e:
+                            logger.warning(f"Error reading existing file header: {e}. Proceeding with potential risk.")
+                            header = False
+                    else:
+                        header = True
+
                     df_batch.to_csv(partial_file, mode='a', header=header, index=False)
                     
                     total_new_processed += len(batch_results)
@@ -197,7 +210,20 @@ def main():
             # Save remaining results
             if batch_results:
                 df_batch = pd.DataFrame(batch_results)
-                header = not os.path.exists(partial_file)
+                
+                if os.path.exists(partial_file):
+                    try:
+                        existing_cols = pd.read_csv(partial_file, nrows=0).columns.tolist()
+                        df_batch = df_batch.reindex(columns=existing_cols)
+                        header = False
+                    except pd.errors.EmptyDataError:
+                        header = True
+                    except Exception as e:
+                        logger.warning(f"Error reading existing file header: {e}")
+                        header = False
+                else:
+                    header = True
+                    
                 df_batch.to_csv(partial_file, mode='a', header=header, index=False)
                 total_new_processed += len(batch_results)
                 

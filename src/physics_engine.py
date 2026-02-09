@@ -81,6 +81,8 @@ class PhysicsEngine:
                 cwd=mol_dir,
                 capture_output=True,
                 text=True,
+                encoding='utf-8',
+                errors='replace',
                 env=env,
                 timeout=600  # 10 minutes timeout per molecule
             )
