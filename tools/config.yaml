@@ -1,0 +1,105 @@
+# PubChem数据采集配置文件
+
+# API设置
+api:
+  base_url: "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
+  requests_per_second: 5  # PubChem官方限制
+  timeout: 30  # 请求超时时间（秒）
+  max_retries: 3  # 最大重试次数
+  retry_delay: 2  # 重试延迟（秒）
+
+# 数据采集设置
+collection:
+  # 目标化合物数量
+  target_count: 5000
+  
+  # 每批次采集数量
+  batch_size: 100
+  
+  # 采集化合物类别（优先包含pKa数据的类别）
+  categories:
+    - "carboxylic acids"
+    - "phenols"
+    - "amines"
+    - "amino acids"
+    - "pharmaceuticals"
+    - "benzoic acids"
+    - "anilines"
+    - "pyridines"
+    - "imidazoles"
+    - "thiols"
+  
+  # pKa搜索关键词
+  pka_keywords:
+    - "pKa"
+    - "dissociation constant"
+    - "acid dissociation"
+    - "ionization constant"
+
+# 数据验证规则
+validation:
+  # pKa值范围（合理范围）
+  pka_min: -2.0
+  pka_max: 20.0
+  
+  # 分子量范围
+  mw_min: 50.0
+  mw_max: 1000.0
+  
+  # 重原子数范围
+  heavy_atoms_min: 3
+  heavy_atoms_max: 100
+  
+  # 是否验证SMILES
+  validate_smiles: true
+
+# 输出设置
+output:
+  # 输出文件路径（相对于项目根目录）
+  output_dir: "data/raw"
+  output_file: "pubchem_compounds.csv"
+  
+  # 日志文件
+  log_file: "data/raw/collection_log.txt"
+  
+  # 断点续传文件
+  checkpoint_file: "data/raw/.checkpoint.json"
+  
+  # 是否保存中间结果
+  save_intermediate: true
+  
+  # 中间结果保存频率（每N个化合物）
+  checkpoint_frequency: 50
+
+# 数据字段设置
+fields:
+  required:
+    - "id"
+    - "smiles"
+    - "pka"
+  optional:
+    - "compound_name"
+    - "molecular_formula"
+    - "molecular_weight"
+    - "iupac_name"
+    - "cid"
+    - "source"
+    - "initial_charge"
+    - "uhf"
+
+# 高级选项
+advanced:
+  # 是否使用缓存
+  use_cache: true
+  
+  # 缓存目录
+  cache_dir: "data/cache"
+  
+  # 是否过滤重复SMILES
+  filter_duplicates: true
+  
+  # 是否标准化SMILES
+  canonicalize_smiles: true
+  
+  # 并发请求数（谨慎使用，受API限制）
+  concurrent_requests: 1
