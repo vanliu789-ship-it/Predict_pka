@@ -150,6 +150,7 @@ class PubChemAPI:
             'MolecularWeight',
             'CanonicalSMILES',
             'IsomericSMILES',
+            'ConnectivitySMILES',
             'IUPACName',
             'Title'
         ]
@@ -166,8 +167,8 @@ class PubChemAPI:
                 'cid': props.get('CID'),
                 'compound_name': props.get('Title', ''),
                 'molecular_formula': props.get('MolecularFormula', ''),
-                'molecular_weight': props.get('MolecularWeight', 0.0),
-                'smiles': props.get('CanonicalSMILES', props.get('IsomericSMILES', '')),
+                'molecular_weight': float(props.get('MolecularWeight', 0.0)),
+                'smiles': props.get('CanonicalSMILES') or props.get('IsomericSMILES') or props.get('ConnectivitySMILES', ''),
                 'iupac_name': props.get('IUPACName', '')
             }
         except Exception as e:
@@ -188,8 +189,8 @@ class PubChemAPI:
         Returns:
             pKa值列表（可能有多个）
         """
-        # 方法1: 从属性中获取
-        url = f"{self.base_url}/compound/cid/{cid}/JSON"
+        # 方法1: 从属性中获取 (使用 PUG View API)
+        url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/{cid}/JSON"
         data = self._request(url)
         
         pka_values = []
@@ -388,44 +389,114 @@ class PubChemScraper:
         返回已知含有pKa数据的化合物CID列表
         这些是常见的有机酸、碱和药物分子
         """
-        known_cids = [
-            # 羧酸类
-            176,      # 乙酸 (acetic acid) pKa~4.76
-            338,      # 丙酸 (propionic acid)
-            264,      # 甲酸 (formic acid)
-            1031,     # 丁酸 (butyric acid)
-            243,      # 苯甲酸 (benzoic acid) pKa~4.2
-            
-            # 酚类
-            996,      # 苯酚 (phenol) pKa~10
-            135,      # 对甲酚 (p-cresol)
-            7150,     # 间甲酚 (m-cresol)
-            
-            # 胺类
-            6267,     # 乙胺 (ethylamine)
-            6537,     # 二乙胺 (diethylamine)
-            6115,     # 苯胺 (aniline) pKa~4.6
-            8082,     # 吡啶 (pyridine) pKa~5.2
-            
-            # 氨基酸类
-            5950,     # 丙氨酸 (alanine)
-            6137,     # 甘氨酸 (glycine)
-            6287,     # 缬氨酸 (valine)
-            6306,     # 亮氨酸 (leucine)
-            
-            # 药物分子
-            2244,     # 阿司匹林 (aspirin) pKa~3.5
-            3672,     # 布洛芬 (ibuprofen)
-            60823,    # 萘普生 (naproxen)
-            2519,     # 咖啡因 (caffeine)
-            
-            # 杂环化合物
-            1049,     # 吡啶 (pyridine)
-            795,      # 咪唑 (imidazole)
-            1174,     # 吡咯 (pyrrole)
-            9253,     # 吲哚 (indole)
+        known_cids = []
+        
+        # 1. 羧酸类 (pKa ~2-5)
+        carboxylic_acids = [
+            176,      # 乙酸 pKa 4.76
+            264,      # 甲酸 pKa 3.75
+            338,      # 丙酸 pKa 4.87
+            1031,     # 丁酸 pKa 4.82
+            7991,     # 戊酸 pKa 4.83
+            8892,     # 己酸 pKa 4.85
+            243,      # 苯甲酸 pKa 4.20
+            445858,   # 水杨酸 pKa 2.97
+            1060,     # 邻苯二甲酸 pKa 2.89
+            10313,    # 草酸 pKa 1.25
+            311,      # 琥珀酸 pKa 4.21
+            1110,     # 马来酸 pKa 1.92
+            444972,   # 富马酸 pKa 3.03
         ]
-        return known_cids
+        known_cids.extend(carboxylic_acids)
+        
+        # 2. 酚类 (pKa ~8-11)
+        phenols = [
+            996,      # 苯酚 pKa 9.95
+            135,      # 对甲酚 pKa 10.26
+            7150,     # 间甲酚 pKa 10.09
+            2879,     # 邻甲酚 pKa 10.28
+            7342,     # 对硝基苯酚 pKa 7.15
+            2394,     # 间硝基苯酚 pKa 8.35
+            1970,     # 邻硝基苯酚 pKa 7.23
+            6998,     # 儿茶酚 pKa 9.34
+            289,      # 氢醌 pKa 9.85
+            7054,     # 对氨基苯酚 pKa 10.30
+        ]
+        known_cids.extend(phenols)
+        
+        # 3. 胺类 (pKa ~9-11)
+        amines = [
+            6267,     # 乙胺 pKa 10.7
+            6537,     # 二乙胺 pKa 10.9
+            6115,     # 苯胺 pKa 4.6
+            7515,     # 甲胺 pKa 10.6
+            9270,     # 正丙胺 pKa 10.5
+            7712,     # 吡啶 pKa 5.2
+            1049,     # 吡啶 pKa 5.25
+            8082,     # 咪唑 pKa 6.95
+            795,      # 咪唑 pKa 7.0
+            8248,     # 哌啶 pKa 11.1
+            8252,     # 吗啉 pKa 8.5
+        ]
+        known_cids.extend(amines)
+        
+        # 4. 氨基酸类 (pKa ~2-10)
+        amino_acids = [
+            5950,     # L-丙氨酸 pKa 2.34, 9.69
+            6137,     # 甘氨酸 pKa 2.34, 9.60
+            6287,     # L-缬氨酸 pKa 2.32, 9.62
+            6306,     # L-亮氨酸 pKa 2.36, 9.60
+            6322,     # L-异亮氨酸 pKa 2.36, 9.68
+            6274,     # L-苯丙氨酸 pKa 1.83, 9.13
+            6305,     # L-色氨酸 pKa 2.38, 9.39
+            6288,     # L-蛋氨酸 pKa 2.28, 9.21
+            5960,     # L-脯氨酸 pKa 1.99, 10.60
+            750,      # L-谷氨酸 pKa 2.19, 4.25, 9.67
+            5961,     # L-天冬氨酸 pKa 1.88, 3.65, 9.60
+            6106,     # L-赖氨酸 pKa 2.18, 8.95, 10.53
+            6140,     # L-精氨酸 pKa 2.17, 9.04, 12.48
+        ]
+        known_cids.extend(amino_acids)
+        
+        # 5. 药物分子
+        drugs = [
+            2244,     # 阿司匹林 pKa 3.5
+            3672,     # 布洛芬 pKa 4.91
+            60823,    # 萘普生 pKa 4.15
+            2519,     # 咖啡因 pKa 10.4
+            3825,     # 尼古丁 pKa 8.0
+            4409,     # 吗啡 pKa 8.0
+            2585,     # 可待因 pKa 8.2
+            3345,     # 扑热息痛 pKa 9.5
+            4754,     # 苯巴比妥 pKa 7.4
+            2157,     # 水杨酸钠 pKa 2.97
+        ]
+        known_cids.extend(drugs)
+        
+        # 6. 杂环化合物
+        heterocycles = [
+            1174,     # 吡咯 pKa 17.5
+            9253,     # 吲哚 pKa 16.97
+            1140,     # 呋喃
+            8030,     # 噻吩
+            1049,     # 吡啶 pKa 5.25
+            9246,     # 喹啉 pKa 4.9
+            8580,     # 异喹啉 pKa 5.4
+        ]
+        known_cids.extend(heterocycles)
+        
+        # 7. 其他重要化合物
+        others = [
+            962,      # 水 pKa 15.7
+            1118,     # 硫酸 pKa -3
+            313,      # 磷酸 pKa 2.15
+            1032,     # 碳酸 pKa 6.35
+            284,      # 氨 pKa 9.25
+            1031,     # 硼酸 pKa 9.24
+        ]
+        known_cids.extend(others)
+        
+        return list(set(known_cids))
 
     def collect_from_category(self, category: str, max_compounds: int = 100) -> int:
         """
@@ -460,14 +531,13 @@ class PubChemScraper:
             if category in category_ranges:
                 start_cid, end_cid = category_ranges[category]
                 logger.info(f"使用随机采样策略补充数据，范围: {start_cid} - {end_cid}")
-                # 假设 random sampling 的 max_attempts 为 max_compounds * 10
-                random_cids = self.api.get_cids_by_random_sampling(start_cid, max_compounds * 2)
+                # 增加采样数量，确保能找到足够多的化合物
+                random_cids = self.api.get_cids_by_random_sampling(start_cid, max_compounds * 10)
                 cids.extend(random_cids)
         
-        # 3. 如果还是没有，尝试使用已知列表
-        if not cids:
-            logger.warning(f"未找到任何化合物CID，尝试使用固定列表")
-            cids = self._get_known_pka_compounds()
+        # 3. 始终添加已知化合物列表作为保底
+        logger.info(f"添加已知化合物列表作为补充")
+        cids.extend(self._get_known_pka_compounds())
 
         # 去重
         cids = list(set(cids))

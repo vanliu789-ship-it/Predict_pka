@@ -185,7 +185,7 @@ class SimplePubChemScraper:
     def get_compound_data(self, cid: int) -> Optional[Dict]:
         """获取单个化合物的完整数据"""
         # 1. 获取基本属性
-        props_url = f"{self.base_url}/compound/cid/{cid}/property/MolecularFormula,MolecularWeight,CanonicalSMILES,IUPACName,Title/JSON"
+        props_url = f"{self.base_url}/compound/cid/{cid}/property/MolecularFormula,MolecularWeight,CanonicalSMILES,IsomericSMILES,IUPACName,Title/JSON"
         props_data = self._request(props_url)
         
         if not props_data or 'PropertyTable' not in props_data:
@@ -203,7 +203,7 @@ class SimplePubChemScraper:
             return None
         
         # 3. 验证SMILES
-        smiles = props.get('CanonicalSMILES', '')
+        smiles = props.get('CanonicalSMILES') or props.get('IsomericSMILES') or props.get('ConnectivitySMILES', '')
         if not smiles or not self._validate_smiles(smiles):
             return None
         
@@ -226,8 +226,8 @@ class SimplePubChemScraper:
     
     def _extract_pka(self, cid: int) -> List[float]:
         """从PubChem记录中提取pKa值"""
-        # 获取完整记录
-        record_url = f"{self.base_url}/compound/cid/{cid}/JSON"
+        # 获取完整记录 (使用 PUG View API 而不是 PUG REST)
+        record_url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/{cid}/JSON"
         data = self._request(record_url)
         
         if not data or 'Record' not in data:
