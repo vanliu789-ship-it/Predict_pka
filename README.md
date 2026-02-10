@@ -49,17 +49,19 @@ conda activate pka_predictor
 如果需要从PubChem采集新数据：
 
 ```bash
-# 快速测试（采集20个化合物）
+# 快速测试（采集20个化合物，验证工具）
 python tools/quick_start.py
 
-# 完整采集（采集5000个化合物，约3小时）
-python tools/pubchem_scraper.py
+# 推荐：使用简化版采集器（快速可靠）
+python tools/pubchem_scraper_simple.py --target 100
 
-# 自定义数量
+# 或使用完整版采集器（更多选项）
 python tools/pubchem_scraper.py --target 1000
 ```
 
-详细说明请查看 [tools/README.md](tools/README.md)
+**📌 重要**: 推荐使用 `pubchem_scraper_simple.py`，基于已知化合物列表，无需搜索API，更稳定快速。
+
+详细说明请查看 [tools/USAGE.md](tools/USAGE.md) 或 [tools/README.md](tools/README.md)
 
 ### 3. 模型训练
 

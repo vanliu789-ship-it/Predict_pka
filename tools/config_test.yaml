@@ -1,0 +1,60 @@
+advanced:
+  cache_dir: data/cache
+  canonicalize_smiles: true
+  concurrent_requests: 1
+  filter_duplicates: true
+  use_cache: true
+api:
+  base_url: https://pubchem.ncbi.nlm.nih.gov/rest/pug
+  max_retries: 3
+  requests_per_second: 5
+  retry_delay: 2
+  timeout: 30
+collection:
+  batch_size: 100
+  categories:
+  - carboxylic acids
+  - phenols
+  - amines
+  - amino acids
+  - pharmaceuticals
+  - benzoic acids
+  - anilines
+  - pyridines
+  - imidazoles
+  - thiols
+  pka_keywords:
+  - pKa
+  - dissociation constant
+  - acid dissociation
+  - ionization constant
+  target_count: 20
+fields:
+  optional:
+  - compound_name
+  - molecular_formula
+  - molecular_weight
+  - iupac_name
+  - cid
+  - source
+  - initial_charge
+  - uhf
+  required:
+  - id
+  - smiles
+  - pka
+output:
+  checkpoint_file: data/raw/.checkpoint.json
+  checkpoint_frequency: 50
+  log_file: data/raw/collection_log.txt
+  output_dir: data/raw
+  output_file: pubchem_test.csv
+  save_intermediate: true
+validation:
+  heavy_atoms_max: 100
+  heavy_atoms_min: 3
+  mw_max: 1000.0
+  mw_min: 50.0
+  pka_max: 20.0
+  pka_min: -2.0
+  validate_smiles: true
