@@ -5,6 +5,8 @@ import logging
 from multiprocessing import Pool, cpu_count
 from functools import partial
 from tqdm import tqdm
+from typing import Mapping, Sequence, TypeVar, Any
+K = TypeVar('K')
 
 from src.preprocessor import MoleculePreprocessor
 from src.physics_engine import PhysicsEngine
@@ -81,6 +83,13 @@ def process_single_molecule(row):
         logger.error(f"Worker failed for {row.get('id', 'unknown')}: {e}")
         return None
 
+def predict(data: Sequence[Mapping[K, Any]]) -> ...:
+    """
+    Predict pKa values for a sequence of molecules.
+    """
+    # Placeholder for actual implementation
+    pass
+
 def main():
     parser = argparse.ArgumentParser(description="Physics-Informed pKa Predictor")
     parser.add_argument("--data", type=str, default="data/raw/data.csv", help="Path to input CSV")
@@ -135,6 +144,7 @@ def main():
     # Checkpointing Logic: Resume from partial file
     processed_ids = set()
     partial_file = args.processed_file
+    df_existing = None  # 初始化为None，确保变量始终被定义
     
     if os.path.exists(partial_file):
         try:
@@ -152,7 +162,12 @@ def main():
     
     if len(df_to_process) == 0:
         logger.info("All molecules already processed!")
-        processed_data = df_existing.to_dict('records') # Load all for training
+        # 检查df_existing是否存在并有效
+        if df_existing is not None:
+            processed_data = df_existing.to_dict('records')  # Load all for training
+        else:
+            logger.error("No existing processed data found. Cannot proceed.")
+            return
     else:
         data_records = df_to_process.to_dict('records')
         logger.info(f"Processing {len(data_records)} new molecules (Total: {len(df)}).")
