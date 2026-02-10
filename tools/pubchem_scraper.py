@@ -54,7 +54,7 @@ class PubChemAPI:
             time.sleep(min_interval - elapsed)
         self.last_request_time = time.time()
     
-    def _request(self, url: str, params: dict = None) -> Optional[dict]:
+    def _request(self, url: str, params: Optional[dict] = None) -> Optional[dict]:
         """发送HTTP请求，带重试机制"""
         self._rate_limit()
         

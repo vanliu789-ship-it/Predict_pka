@@ -5,7 +5,7 @@ import logging
 from multiprocessing import Pool, cpu_count
 from functools import partial
 from tqdm import tqdm
-from typing import Mapping, Sequence, TypeVar, Any
+from typing import Mapping, Sequence, TypeVar, Any, List, Dict, cast
 K = TypeVar('K')
 
 from src.preprocessor import MoleculePreprocessor
@@ -164,7 +164,7 @@ def main():
         logger.info("All molecules already processed!")
         # 检查df_existing是否存在并有效
         if df_existing is not None:
-            processed_data = df_existing.to_dict('records')  # Load all for training
+            processed_data = cast(List[Dict[str, Any]], df_existing.to_dict('records'))  # Load all for training
         else:
             logger.error("No existing processed data found. Cannot proceed.")
             return
@@ -246,7 +246,7 @@ def main():
         
         # Reload full dataset for training
         if os.path.exists(partial_file):
-            processed_data = pd.read_csv(partial_file).to_dict('records')
+            processed_data = cast(List[Dict[str, Any]], pd.read_csv(partial_file).to_dict('records'))
         else:
             logger.error("No processed data found. Calculation failed for all molecules.")
             return
