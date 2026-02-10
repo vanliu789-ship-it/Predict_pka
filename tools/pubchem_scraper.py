@@ -99,7 +99,7 @@ class PubChemAPI:
             logger.error(f"解析搜索结果失败: {e}")
             return []
     
-    def get_cids_by_random_sampling(self, start_cid: int, count: int, max_attempts: int = None) -> List[int]:
+    def get_cids_by_random_sampling(self, start_cid: int, count: int, max_attempts: Optional[int] = None) -> List[int]:
         """
         通过随机采样获取CID列表（更可靠的方法）
         
@@ -348,45 +348,19 @@ class PubChemScraper:
         """保存断点"""
         try:
             checkpoint = {
-                'collected_cids': list(self.collected_cids),
-        使用预定义的已知化合物列表 + 随机采样策略
-        
-        Args:
-            category: 化合物类别
-            max_compounds: 最大采集数量
-            
-        Returns:
-            成功采集的化合物数量
-        """
-        logger.info(f"开始采集类别: {category}")
-        
-        # 使用已知含pKa的化合物起始ID范围
-        category_ranges = {
-            "carboxylic acids": (176, 10000),      # 从乙酸开始
-            "phenols": (996, 20000),               # 从苯酚开始
-            "amines": (6267, 30000),               # 从乙胺开始
-            "amino acids": (5950, 15000),          # 从丙氨酸开始
-            "pharmaceuticals": (2244, 50000),      # 从阿司匹林开始
-            "benzoic acids": (243, 25000),         # 从苯甲酸开始
-            "anilines": (6115, 35000),             # 从苯胺开始
-            "pyridines": (1049, 40000),            # 从吡啶开始
-            "imidazoles": (795, 45000),            # 从咪唑开始
-            "thiols": (6970, 30000),               # 从乙硫醇开始
-        }
-        
-        # 如果类别在预定义范围内，使用该范围；否则使用默认范围
-        start_cid, end_cid = category_ranges.get(category, (1000, 50000))
-        
-        # 使用随机采样获取CID
-        logger.info(f"使用随机采样策略，范围: {start_cid} - {end_cid}")
-        cids = self.api.get_cids_by_random_sampling(start_cid, max_compounds * 5, max_compounds * 10)
-        logger.info(f"获取到 {len(cids)} 个候选化合物CID")
-        
-        if not cids:
-            logger.warning(f"未找到任何化合物CID，尝试使用固定列表")
-            # 使用一些已知的含pKa化合物CID
-            cids = self._get_known_pka_compounds(
+                'collected_cids': list(self.collected_cids)
+            }
+            with open(self.checkpoint_file, 'w') as f:
+                json.dump(checkpoint, f)
+        except Exception as e:
+            logger.warning(f"保存断点失败: {e}")
+
+    def _save_intermediate_results(self):
+        """保存中间结果"""
         try:
+            if not self.compounds:
+                return
+
             df_new = pd.DataFrame(self.compounds)
             
             # 追加到现有文件或创建新文件
@@ -408,7 +382,51 @@ class PubChemScraper:
             
         except Exception as e:
             logger.error(f"保存中间结果失败: {e}")
-    
+
+    def _get_known_pka_compounds(self) -> List[int]:
+        """
+        返回已知含有pKa数据的化合物CID列表
+        这些是常见的有机酸、碱和药物分子
+        """
+        known_cids = [
+            # 羧酸类
+            176,      # 乙酸 (acetic acid) pKa~4.76
+            338,      # 丙酸 (propionic acid)
+            264,      # 甲酸 (formic acid)
+            1031,     # 丁酸 (butyric acid)
+            243,      # 苯甲酸 (benzoic acid) pKa~4.2
+            
+            # 酚类
+            996,      # 苯酚 (phenol) pKa~10
+            135,      # 对甲酚 (p-cresol)
+            7150,     # 间甲酚 (m-cresol)
+            
+            # 胺类
+            6267,     # 乙胺 (ethylamine)
+            6537,     # 二乙胺 (diethylamine)
+            6115,     # 苯胺 (aniline) pKa~4.6
+            8082,     # 吡啶 (pyridine) pKa~5.2
+            
+            # 氨基酸类
+            5950,     # 丙氨酸 (alanine)
+            6137,     # 甘氨酸 (glycine)
+            6287,     # 缬氨酸 (valine)
+            6306,     # 亮氨酸 (leucine)
+            
+            # 药物分子
+            2244,     # 阿司匹林 (aspirin) pKa~3.5
+            3672,     # 布洛芬 (ibuprofen)
+            60823,    # 萘普生 (naproxen)
+            2519,     # 咖啡因 (caffeine)
+            
+            # 杂环化合物
+            1049,     # 吡啶 (pyridine)
+            795,      # 咪唑 (imidazole)
+            1174,     # 吡咯 (pyrrole)
+            9253,     # 吲哚 (indole)
+        ]
+        return known_cids
+
     def collect_from_category(self, category: str, max_compounds: int = 100) -> int:
         """
         从特定化合物类别采集数据
@@ -422,9 +440,38 @@ class PubChemScraper:
         """
         logger.info(f"开始采集类别: {category}")
         
-        # 搜索化合物
-        cids = self.api.search_compounds(category, max_results=max_compounds * 3)  # 多搜索一些以备筛选
-        logger.info(f"搜索到 {len(cids)} 个化合物CID")
+        # 1. 尝试使用搜索策略
+        cids = self.api.search_compounds(category, max_results=max_compounds * 3)
+        
+        # 2. 如果搜索结果少，尝试使用随机采样策略 (针对已知类别)
+        if len(cids) < max_compounds:
+            category_ranges = {
+                "carboxylic acids": (176, 10000),      # 从乙酸开始
+                "phenols": (996, 20000),               # 从苯酚开始
+                "amines": (6267, 30000),               # 从乙胺开始
+                "amino acids": (5950, 15000),          # 从丙氨酸开始
+                "pharmaceuticals": (2244, 50000),      # 从阿司匹林开始
+                "benzoic acids": (243, 25000),         # 从苯甲酸开始
+                "anilines": (6115, 35000),             # 从苯胺开始
+                "pyridines": (1049, 40000),            # 从吡啶开始
+                "imidazoles": (795, 45000),            # 从咪唑开始
+                "thiols": (6970, 30000),               # 从乙硫醇开始
+            }
+            if category in category_ranges:
+                start_cid, end_cid = category_ranges[category]
+                logger.info(f"使用随机采样策略补充数据，范围: {start_cid} - {end_cid}")
+                # 假设 random sampling 的 max_attempts 为 max_compounds * 10
+                random_cids = self.api.get_cids_by_random_sampling(start_cid, max_compounds * 2)
+                cids.extend(random_cids)
+        
+        # 3. 如果还是没有，尝试使用已知列表
+        if not cids:
+            logger.warning(f"未找到任何化合物CID，尝试使用固定列表")
+            cids = self._get_known_pka_compounds()
+
+        # 去重
+        cids = list(set(cids))
+        logger.info(f"准备处理 {len(cids)} 个候选化合物CID")
         
         collected_count = 0
         
@@ -471,51 +518,7 @@ class PubChemScraper:
             if self.config['advanced']['filter_duplicates']:
                 if compound['smiles'] in self.collected_smiles:
                     continue
-        _get_known_pka_compounds(self) -> List[int]:
-        """
-        返回已知含有pKa数据的化合物CID列表
-        这些是常见的有机酸、碱和药物分子
-        """
-        known_cids = [
-            # 羧酸类
-            176,      # 乙酸 (acetic acid) pKa~4.76
-            338,      # 丙酸 (propionic acid)
-            264,      # 甲酸 (formic acid)
-            1031,     # 丁酸 (butyric acid)
-            243,      # 苯甲酸 (benzoic acid) pKa~4.2
             
-            # 酚类
-            996,      # 苯酚 (phenol) pKa~10
-            135,      # 对甲酚 (p-cresol)
-            7150,     # 间甲酚 (m-cresol)
-            
-            # 胺类
-            6267,     # 乙胺 (ethylamine)
-            6537,     # 二乙胺 (diethylamine)
-            6115,     # 苯胺 (aniline) pKa~4.6
-            8082,     # 吡啶 (pyridine) pKa~5.2
-            
-            # 氨基酸类
-            5950,     # 丙氨酸 (alanine)
-            6137,     # 甘氨酸 (glycine)
-            6287,     # 缬氨酸 (valine)
-            6306,     # 亮氨酸 (leucine)
-            
-            # 药物分子
-            2244,     # 阿司匹林 (aspirin) pKa~3.5
-            3672,     # 布洛芬 (ibuprofen)
-            60823,    # 萘普生 (naproxen)
-            2519,     # 咖啡因 (caffeine)
-            
-            # 杂环化合物
-            1049,     # 吡啶 (pyridine)
-            795,      # 咪唑 (imidazole)
-            1174,     # 吡咯 (pyrrole)
-            9253,     # 吲哚 (indole)
-        ]
-        return known_cids
-    
-    def     
             # 添加到结果
             self.compounds.append(compound)
             self.collected_cids.add(cid)
