@@ -135,15 +135,15 @@ class PubChemAPI:
         
         return cids
     
-    def get_compound_properties(self, cid: int) -> Optional[Dict]:
+    def get_compound_properties(self, cids: List[int]) -> Dict[int, Dict]:
         """
-        获取化合物基本属性
+        批量获取化合物基本属性
         
         Args:
-            cid: 化合物CID
+            cids: 化合物CID列表
             
         Returns:
-            化合物属性字典
+            字典映射 {cid: properties}
         """
         properties = [
             'MolecularFormula',
@@ -155,25 +155,34 @@ class PubChemAPI:
             'Title'
         ]
         
-        url = f"{self.base_url}/compound/cid/{cid}/property/{','.join(properties)}/JSON"
+        # 将CID列表转换为字符串
+        cid_str = ','.join(map(str, cids))
+        url = f"{self.base_url}/compound/cid/{cid_str}/property/{','.join(properties)}/JSON"
         data = self._request(url)
         
+        results = {}
         if not data or 'PropertyTable' not in data:
-            return None
+            return results
         
         try:
-            props = data['PropertyTable']['Properties'][0]
-            return {
-                'cid': props.get('CID'),
-                'compound_name': props.get('Title', ''),
-                'molecular_formula': props.get('MolecularFormula', ''),
-                'molecular_weight': float(props.get('MolecularWeight', 0.0)),
-                'smiles': props.get('CanonicalSMILES') or props.get('IsomericSMILES') or props.get('ConnectivitySMILES', ''),
-                'iupac_name': props.get('IUPACName', '')
-            }
+            props_list = data['PropertyTable']['Properties']
+            for props in props_list:
+                cid = props.get('CID')
+                if not cid:
+                    continue
+                    
+                results[cid] = {
+                    'cid': cid,
+                    'compound_name': props.get('Title', ''),
+                    'molecular_formula': props.get('MolecularFormula', ''),
+                    'molecular_weight': float(props.get('MolecularWeight', 0.0)),
+                    'smiles': props.get('CanonicalSMILES') or props.get('IsomericSMILES') or props.get('ConnectivitySMILES', ''),
+                    'iupac_name': props.get('IUPACName', '')
+                }
         except Exception as e:
-            logger.error(f"解析化合物属性失败 (CID: {cid}): {e}")
-            return None
+            logger.error(f"解析化合物属性失败: {e}")
+            
+        return results
     
     def get_pka_data(self, cid: int) -> Optional[List[float]]:
         """
@@ -207,7 +216,7 @@ class PubChemAPI:
             except Exception as e:
                 logger.debug(f"从记录中提取pKa失败 (CID: {cid}): {e}")
         
-        return pka_values if pka_values else None
+        return list(set(pka_values)) if pka_values else None
     
     def _extract_pka_from_section(self, section: dict) -> List[float]:
         """从section中递归提取pKa值"""
@@ -224,11 +233,23 @@ class PubChemAPI:
                 value = info.get('Value', {})
                 if isinstance(value, dict):
                     string_val = value.get('StringWithMarkup', [{}])[0].get('String', '')
+                    
+                    # 1. 尝试匹配范围 (e.g. "3.5 - 3.7")
+                    range_matches = re.findall(r'pKa.*?(\d+\.?\d*)\s*-\s*(\d+\.?\d*)', string_val, re.IGNORECASE)
+                    for start, end in range_matches:
+                        try:
+                            avg = (float(start) + float(end)) / 2
+                            pka_values.append(avg)
+                        except ValueError:
+                            pass
+                    
+                    # 2. 尝试匹配单个值
                     # 使用正则提取数字
                     matches = re.findall(r'pKa\s*[=:~]?\s*(-?\d+\.?\d*)', string_val, re.IGNORECASE)
                     for match in matches:
                         try:
-                            pka_values.append(float(match))
+                            val = float(match)
+                            pka_values.append(val)
                         except ValueError:
                             pass
         
@@ -237,7 +258,7 @@ class PubChemAPI:
         for subsection in subsections:
             pka_values.extend(self._extract_pka_from_section(subsection))
         
-        return pka_values
+        return list(set(pka_values))
 
 
 class DataValidator:
@@ -544,65 +565,87 @@ class PubChemScraper:
         logger.info(f"准备处理 {len(cids)} 个候选化合物CID")
         
         collected_count = 0
+        batch_size = 50
         
-        for cid in tqdm(cids, desc=f"采集 {category}"):
-            # 跳过已采集的
-            if cid in self.collected_cids:
-                continue
-            
-            # 获取化合物属性
-            props = self.api.get_compound_properties(cid)
-            if not props:
-                continue
-            
-            # 获取pKa数据
-            pka_values = self.api.get_pka_data(cid)
-            if not pka_values:
-                continue
-            
-            # 使用第一个pKa值（通常是最重要的）
-            pka = pka_values[0]
-            
-            # 构建化合物数据
-            compound = {
-                'id': f"pubchem_{cid}",
-                'cid': cid,
-                'smiles': props['smiles'],
-                'pka': pka,
-                'compound_name': props['compound_name'],
-                'molecular_formula': props['molecular_formula'],
-                'molecular_weight': props['molecular_weight'],
-                'iupac_name': props['iupac_name'],
-                'source': f"PubChem_{category}",
-                'initial_charge': 0,
-                'uhf': 0
-            }
-            
-            # 验证数据
-            is_valid, error_msg = self.validator.validate_compound(compound)
-            if not is_valid:
-                logger.debug(f"化合物验证失败 (CID: {cid}): {error_msg}")
-                continue
-            
-            # 去重检查
-            if self.config['advanced']['filter_duplicates']:
-                if compound['smiles'] in self.collected_smiles:
+        with tqdm(total=len(cids), desc=f"采集 {category}") as pbar:
+            for i in range(0, len(cids), batch_size):
+                batch_cids = cids[i:i+batch_size]
+                
+                # 过滤已采集CID
+                target_cids = [cid for cid in batch_cids if cid not in self.collected_cids]
+                
+                # 如果当前批次全部已采集，只更新进度条
+                if not target_cids:
+                    pbar.update(len(batch_cids))
                     continue
-            
-            # 添加到结果
-            self.compounds.append(compound)
-            self.collected_cids.add(cid)
-            self.collected_smiles.add(compound['smiles'])
-            collected_count += 1
-            
-            # 定期保存
-            if collected_count % self.config['output']['checkpoint_frequency'] == 0:
-                self._save_intermediate_results()
-                self._save_checkpoint()
-            
-            # 检查是否达到目标
-            if collected_count >= max_compounds:
-                break
+                
+                # 批量获取属性
+                props_map = self.api.get_compound_properties(target_cids)
+                
+                for cid in target_cids:
+                    pbar.update(1)
+                    
+                    if cid not in props_map:
+                        continue
+                    
+                    props = props_map[cid]
+                    smiles = props['smiles']
+                    
+                    # 全局SMILES去重
+                    if self.config['advanced']['filter_duplicates'] and smiles in self.collected_smiles:
+                        continue
+                    
+                    # 获取pKa数据
+                    pka_values = self.api.get_pka_data(cid)
+                    if not pka_values:
+                        continue
+                    
+                    # 记录所有pKa值供参考
+                    pka_all_str = ";".join(map(str, pka_values))
+                    
+                    # 遍历每个pKa值，创建独立记录
+                    for idx, pka in enumerate(pka_values):
+                        # 构建化合物数据
+                        compound = {
+                            'id': f"pubchem_{cid}_{idx}",
+                            'cid': cid,
+                            'smiles': smiles,
+                            'pka': pka,
+                            'pka_all': pka_all_str,
+                            'compound_name': props['compound_name'],
+                            'molecular_formula': props['molecular_formula'],
+                            'molecular_weight': props['molecular_weight'],
+                            'iupac_name': props['iupac_name'],
+                            'source': f"PubChem_{category}",
+                            'initial_charge': 0,
+                            'uhf': 0
+                        }
+                        
+                        # 验证数据
+                        is_valid, error_msg = self.validator.validate_compound(compound)
+                        if not is_valid:
+                            logger.debug(f"化合物验证失败 (CID: {cid}): {error_msg}")
+                            continue
+                        
+                        # 添加到结果
+                        self.compounds.append(compound)
+                    
+                    # 标记为已采集
+                    self.collected_cids.add(cid)
+                    self.collected_smiles.add(smiles)
+                    collected_count += 1
+                    
+                    # 定期保存
+                    if collected_count % self.config['output']['checkpoint_frequency'] == 0:
+                        self._save_intermediate_results()
+                        self._save_checkpoint()
+                    
+                    # 检查是否达到目标
+                    if collected_count >= max_compounds:
+                        break
+                
+                if collected_count >= max_compounds:
+                    break
         
         # 保存剩余数据
         if self.compounds:
