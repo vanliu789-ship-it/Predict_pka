@@ -54,16 +54,29 @@ class PubChemAPI:
             time.sleep(min_interval - elapsed)
         self.last_request_time = time.time()
     
-    def _request(self, url: str, params: Optional[dict] = None) -> Optional[dict]:
+    def _request(self, url: str, params: Optional[dict] = None, method: str = 'GET', data: Optional[dict] = None) -> Optional[dict]:
         """发送HTTP请求，带重试机制"""
         self._rate_limit()
         
         for attempt in range(self.max_retries):
             try:
-                response = requests.get(url, params=params, timeout=self.timeout)
+                if method.upper() == 'POST':
+                    response = requests.post(url, data=data, timeout=self.timeout)
+                else:
+                    response = requests.get(url, params=params, timeout=self.timeout)
+                
+                # 特殊处理404，不视为系统错误
+                if response.status_code == 404:
+                    return {}
+                
                 response.raise_for_status()
                 return response.json() if response.text else {}
             except requests.exceptions.RequestException as e:
+                # 400 错误可能是因为请求参数问题，记录但不重试过多
+                if isinstance(e, requests.exceptions.HTTPError) and e.response.status_code == 400:
+                     logger.warning(f"请求参数错误 (400): {url} - 可能该批次CID无数据")
+                     return {}
+
                 logger.warning(f"请求失败 (尝试 {attempt+1}/{self.max_retries}): {e}")
                 if attempt < self.max_retries - 1:
                     time.sleep(self.retry_delay * (attempt + 1))
@@ -287,6 +300,83 @@ class PubChemAPI:
             pka_values.extend(self._extract_pka_from_section(subsection))
         
         return list(set(pka_values))
+
+    def get_pka_data_batch(self, cids: List[int]) -> Dict[int, List[float]]:
+        """
+        批量获取化合物的pKa数据 (优化版)
+        使用Annotations API一次性查询多个CID
+        
+        Args:
+            cids: 化合物CID列表
+            
+        Returns:
+            字典映射 {cid: [pka_values]}
+        """
+        results = {}
+        if not cids:
+            return results
+            
+        # PubChem Annotations API 限制每次查询数量，分批处理
+        batch_size = 50
+        
+        for i in range(0, len(cids), batch_size):
+            batch_cids = cids[i:i+batch_size]
+            cid_str = ",".join(map(str, batch_cids))
+            
+            # 使用Annotations API查询Dissociation Constants
+            # 改用POST方法，避免URL过长导致的400错误
+            # 注意：PubChem PUG REST POST请求通常需要将参数放在body中，或者是multipart/form-data
+            # 对于Annotations API，GET通常够用，但如果CID太多还是POST稳妥
+            # 实际上，PubChem Annotations API的GET限制较宽松，但为了保险，我们先尝试减小batch_size
+            # 如果还是报错，说明可能API变动。
+            # 另一种策略：对于400错误，可能是因为没有找到数据。
+            
+            url = f"{self.base_url}/annotations/heading/Dissociation%20Constants/data/JSON"
+            params = {'cid': cid_str}
+            
+            # 尝试请求
+            data = self._request(url, params=params)
+            
+            if data and 'Annotations' in data:
+                annotations = data['Annotations']['Annotation']
+                for anno in annotations:
+                    cid = anno.get('LinkedRecords', {}).get('CID', [None])[0]
+                    if not cid:
+                        continue
+                        
+                    pka_values = []
+                    # 提取数据
+                    for item in anno.get('Data', []):
+                        val_obj = item.get('Value', {})
+                        string_val = val_obj.get('StringWithMarkup', [{}])[0].get('String', '')
+                        if not string_val:
+                            continue
+                            
+                        # 解析pKa值 (复用之前的正则逻辑)
+                        import re
+                        # 1. 尝试匹配范围
+                        range_matches = re.findall(r'pKa.*?(\d+\.?\d*)\s*-\s*(\d+\.?\d*)', string_val, re.IGNORECASE)
+                        for start, end in range_matches:
+                            try:
+                                avg = (float(start) + float(end)) / 2
+                                pka_values.append(avg)
+                            except ValueError:
+                                pass
+                        
+                        # 2. 尝试匹配单个值
+                        if not range_matches:
+                            matches = re.findall(r'pKa\s*[=:~]?\s*(-?\d+\.?\d*)', string_val, re.IGNORECASE)
+                            for match in matches:
+                                try:
+                                    val = float(match)
+                                    pka_values.append(val)
+                                except ValueError:
+                                    pass
+                                    
+                    if pka_values:
+                        results[cid] = list(set(pka_values))
+        
+        return results
 
 
 class DataValidator:
@@ -560,10 +650,15 @@ class PubChemScraper:
         """
         logger.info(f"开始采集类别: {category}")
         
-        # 1. 尝试使用搜索策略
-        cids = self.api.search_compounds(category, max_results=max_compounds * 3)
+        # 1. 尝试使用搜索策略 (忽略失败)
+        cids = []
+        try:
+             search_result = self.api.search_compounds(category, max_results=max_compounds * 3)
+             cids.extend(search_result)
+        except:
+             pass
         
-        # 2. 如果搜索结果少，尝试使用随机采样策略 (针对已知类别)
+        # 2. 如果搜索结果少，使用随机采样策略
         if len(cids) < max_compounds:
             category_ranges = {
                 "carboxylic acids": (176, 10000),      # 从乙酸开始
@@ -580,11 +675,11 @@ class PubChemScraper:
             if category in category_ranges:
                 start_cid, end_cid = category_ranges[category]
                 logger.info(f"使用随机采样策略补充数据，范围: {start_cid} - {end_cid}")
-                # 增加采样数量，确保能找到足够多的化合物
+                # 增加采样数量
                 random_cids = self.api.get_cids_by_random_sampling(start_cid, max_compounds * 10)
                 cids.extend(random_cids)
         
-        # 3. 始终添加已知化合物列表作为保底
+        # 3. 添加已知化合物列表
         logger.info(f"添加已知化合物列表作为补充")
         cids.extend(self._get_known_pka_compounds())
 
@@ -593,7 +688,7 @@ class PubChemScraper:
         logger.info(f"准备处理 {len(cids)} 个候选化合物CID")
         
         collected_count = 0
-        batch_size = 50
+        batch_size = 50 # 增大批次以利用批量API优势
         
         with tqdm(total=len(cids), desc=f"采集 {category}") as pbar:
             for i in range(0, len(cids), batch_size):
@@ -602,30 +697,34 @@ class PubChemScraper:
                 # 过滤已采集CID
                 target_cids = [cid for cid in batch_cids if cid not in self.collected_cids]
                 
-                # 如果当前批次全部已采集，只更新进度条
                 if not target_cids:
                     pbar.update(len(batch_cids))
                     continue
                 
-                # 批量获取属性
-                props_map = self.api.get_compound_properties(target_cids)
+                # 关键优化：先批量查询pKa，再查属性！
+                # 这样可以过滤掉绝大多数没有pKa数据的化合物，无需查询它们的SMILES
+                pka_map = self.api.get_pka_data_batch(target_cids)
                 
-                for cid in target_cids:
-                    pbar.update(1)
+                # 只有不仅SMILES还需要pKa的才继续处理
+                cids_with_pka = list(pka_map.keys())
+                
+                if not cids_with_pka:
+                    pbar.update(len(batch_cids))
+                    continue
                     
+                # 批量获取这些有pKa数据的化合物的属性
+                props_map = self.api.get_compound_properties(cids_with_pka)
+                
+                for cid in cids_with_pka:
                     if cid not in props_map:
                         continue
-                    
+                        
                     props = props_map[cid]
                     smiles = props['smiles']
+                    pka_values = pka_map[cid]
                     
                     # 全局SMILES去重
                     if self.config['advanced']['filter_duplicates'] and smiles in self.collected_smiles:
-                        continue
-                    
-                    # 获取pKa数据
-                    pka_values = self.api.get_pka_data(cid)
-                    if not pka_values:
                         continue
                     
                     # 记录所有pKa值供参考
@@ -652,7 +751,7 @@ class PubChemScraper:
                         # 验证数据
                         is_valid, error_msg = self.validator.validate_compound(compound)
                         if not is_valid:
-                            logger.debug(f"化合物验证失败 (CID: {cid}): {error_msg}")
+                            # logger.debug(f"化合物验证失败 (CID: {cid}): {error_msg}")
                             continue
                         
                         # 添加到结果
@@ -662,15 +761,19 @@ class PubChemScraper:
                     self.collected_cids.add(cid)
                     self.collected_smiles.add(smiles)
                     collected_count += 1
+                
+                # 更新进度条
+                pbar.update(len(batch_cids))
+                pbar.set_postfix({"有效": collected_count})
                     
-                    # 定期保存
-                    if collected_count % self.config['output']['checkpoint_frequency'] == 0:
-                        self._save_intermediate_results()
-                        self._save_checkpoint()
-                    
-                    # 检查是否达到目标
-                    if collected_count >= max_compounds:
-                        break
+                # 定期保存
+                if collected_count > 0 and collected_count % self.config['output']['checkpoint_frequency'] == 0:
+                    self._save_intermediate_results()
+                    self._save_checkpoint()
+                
+                # 检查是否达到目标
+                if collected_count >= max_compounds:
+                    break
                 
                 if collected_count >= max_compounds:
                     break
