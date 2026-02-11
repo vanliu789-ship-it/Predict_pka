@@ -101,7 +101,7 @@ class PubChemAPI:
     
     def get_cids_by_random_sampling(self, start_cid: int, count: int, max_attempts: Optional[int] = None) -> List[int]:
         """
-        通过随机采样获取CID列表（更可靠的方法）
+        通过随机采样获取CID列表（批量优化版）
         
         Args:
             start_cid: 起始CID
@@ -114,26 +114,54 @@ class PubChemAPI:
         import random
         
         if max_attempts is None:
-            max_attempts = count * 3
+            max_attempts = count * 10  # 增加尝试次数预算，因为批量处理很快
         
         cids = []
         attempts = 0
         current_cid = start_cid
+        batch_check_size = 50  # 每次批量验证50个ID
         
-        while len(cids) < count and attempts < max_attempts:
-            # 随机跳跃，避免连续ID
-            current_cid += random.randint(1, 100)
-            
-            # 检查CID是否有效
-            url = f"{self.base_url}/compound/cid/{current_cid}/property/MolecularFormula/JSON"
-            data = self._request(url)
-            
-            if data and 'PropertyTable' in data:
-                cids.append(current_cid)
-            
-            attempts += 1
+        # 使用tqdm显示随机采样进度
+        with tqdm(total=count, desc=f"随机采样 (起始CID {start_cid})", unit="个") as pbar:
+            while len(cids) < count and attempts < max_attempts:
+                # 1. 生成一批候选CID
+                batch_candidates = []
+                for _ in range(batch_check_size):
+                    # 随机跳跃
+                    step = random.randint(1, 50)
+                    current_cid += step
+                    batch_candidates.append(current_cid)
+                
+                # 2. 批量验证CID有效性 (一次请求验证50个)
+                # 请求MolecularFormula比完整记录更轻量
+                cid_str = ",".join(map(str, batch_candidates))
+                url = f"{self.base_url}/compound/cid/{cid_str}/property/MolecularFormula/JSON"
+                
+                try:
+                    data = self._request(url)
+                    
+                    # 3. 处理有效结果
+                    if data and 'PropertyTable' in data:
+                        valid_props = data['PropertyTable']['Properties']
+                        for prop in valid_props:
+                            valid_cid = prop.get('CID')
+                            if valid_cid:
+                                cids.append(valid_cid)
+                                pbar.update(1)
+                                if len(cids) >= count:
+                                    break
+                except Exception as e:
+                    # 批量请求失败可能是因为某个ID异常，忽略本次批量
+                    pass
+                
+                attempts += batch_check_size
+                pbar.set_postfix({"尝试": attempts, "命中": len(cids)})
+                
+                # 每500次尝试更新一次描述
+                if attempts % 500 == 0:
+                    pbar.set_description(f"随机采样 (当前CID {current_cid})")
         
-        return cids
+        return cids[:count]
     
     def get_compound_properties(self, cids: List[int]) -> Dict[int, Dict]:
         """
