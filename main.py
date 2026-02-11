@@ -84,7 +84,7 @@ def process_single_molecule(row):
 
 def main():
     parser = argparse.ArgumentParser(description="Physics-Informed pKa Predictor")
-    parser.add_argument("--data", type=str, default="data/raw/data.csv", help="Path to input CSV")
+    parser.add_argument("--data", type=str, default="data/raw/pubchem_compounds.csv", help="Path to input CSV")
     parser.add_argument("--n_jobs", type=int, default=max(1, cpu_count() - 1), help="Number of parallel jobs")
     parser.add_argument("--output_dir", type=str, default="data/interim/structures", help="Directory for 3D structures")
     parser.add_argument("--xtb_dir", type=str, default="temp", help="Directory for xtb calculations")
@@ -248,12 +248,15 @@ def main():
 
     # 3. Model Training or Prediction
     trainer = ModelTrainer()
+    
+    # Cast for type safety
+    processed_data_typed = cast(List[Dict[str, Any]], processed_data)
 
     if mode == 'train':
         logger.info("Starting model training...")
         
         try:
-            X, y = trainer.prepare_data(processed_data)
+            X, y = trainer.prepare_data(processed_data_typed)
             
             # Evaluate
             trainer.evaluate(X, y)
@@ -273,7 +276,7 @@ def main():
                 return
 
             trainer.load_model(args.model_path)
-            predictions = trainer.predict(processed_data)
+            predictions = trainer.predict(processed_data_typed)
             
             if predictions:
                 pred_df = pd.DataFrame(predictions)

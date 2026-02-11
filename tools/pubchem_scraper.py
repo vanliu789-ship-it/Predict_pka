@@ -24,11 +24,15 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 # 配置日志
+log_dir = PROJECT_ROOT / "data" / "raw"
+log_dir.mkdir(parents=True, exist_ok=True)
+log_file = log_dir / "scraper.log"
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("tools/scraper.log"),
+        logging.FileHandler(str(log_file)),
         logging.StreamHandler()
     ]
 )

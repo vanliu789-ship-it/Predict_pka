@@ -37,7 +37,7 @@ python tools/pubchem_scraper.py --config my_config.yaml
 
 采集完成后，数据将保存在：
 - **主数据文件**: `data/raw/pubchem_compounds.csv`
-- **日志文件**: `data/raw/collection_log.txt`
+- **日志文件**: `data/raw/scraper.log`
 - **断点文件**: `data/raw/.checkpoint.json`（用于断点续传）
 
 ## ⚙️ 配置说明

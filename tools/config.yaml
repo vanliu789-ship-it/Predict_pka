@@ -45,7 +45,7 @@ output:
   output_file: "pubchem_compounds.csv"
   
   # 日志文件
-  log_file: "data/raw/collection_log.txt"
+  log_file: "data/raw/scraper.log"
   
   # 断点续传文件
   checkpoint_file: "data/raw/.checkpoint.json"

@@ -68,11 +68,13 @@ class PhysicsEngine:
             "--uhf", str(uhf)
         ]
         
+        logger.info(f"Running xtb command: {' '.join(cmd)}")
+        
         # Set environment variables to limit threads per xtb process
         env = os.environ.copy()
         env["OMP_NUM_THREADS"] = "1"
         env["MKL_NUM_THREADS"] = "1"
-        env["OMP_STACKSIZE"] = "2000M"  # Use 'M' suffix for compatibility
+        env["OMP_STACKSIZE"] = "128M"  # Use 'M' suffix for compatibility
         
         try:
             # Run xtb
