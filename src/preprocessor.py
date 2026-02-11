@@ -1,6 +1,6 @@
 import os
 from rdkit import Chem
-from rdkit.Chem import AllChem
+from rdkit.Chem import AllChem, rdDistGeom, rdForceFieldHelpers
 from rdkit.Chem.SaltRemover import SaltRemover
 from rdkit.Chem.MolStandardize import rdMolStandardize
 from typing import List, Optional, Tuple
@@ -66,21 +66,29 @@ def _process_single_wrapper(args):
              logger.error(f"Molecule {mol_id} has no atoms after standardization")
              return None
 
-        params = AllChem.ETKDGv3()
+        params = rdDistGeom.ETKDGv3()
         params.randomSeed = 42
-        res = AllChem.EmbedMolecule(mol, params)
+        res = rdDistGeom.EmbedMolecule(mol, params)
         
         if res == -1:
             params.useRandomCoords = True
-            res = AllChem.EmbedMolecule(mol, params)
+            res = rdDistGeom.EmbedMolecule(mol, params)
             
         if res == -1:
             return None
             
         try:
-            AllChem.MMFFOptimizeMolecule(mol)
-        except:
-            pass
+            if rdForceFieldHelpers.MMFFOptimizeMolecule(mol) != 0:
+                # If MMFF fails to converge or setup, try UFF
+                if rdForceFieldHelpers.UFFOptimizeMolecule(mol) != 0:
+                     logger.warning(f"Force field optimization failed for {mol_id}")
+                     # Even if not fully converged, we proceed, but maybe log it.
+        except Exception:
+             # Try UFF as fallback
+             try:
+                rdForceFieldHelpers.UFFOptimizeMolecule(mol)
+             except:
+                pass
 
         # 4. Save
         xyz_block = Chem.MolToXYZBlock(mol)

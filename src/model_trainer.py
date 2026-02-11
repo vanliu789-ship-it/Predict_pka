@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import os
 from rdkit import Chem
-from rdkit.Chem import AllChem
+from rdkit.Chem import rdMolDescriptors, rdFingerprintGenerator
 from rdkit import DataStructs
 import xgboost as xgb
 from sklearn.model_selection import KFold, cross_validate
@@ -43,14 +43,16 @@ class ModelTrainer:
         fps = []
         valid_indices = []
         
+        # Use new generator API to avoid deprecation warnings
+        mfgen = rdFingerprintGenerator.GetMorganGenerator(radius=self.fp_radius, fpSize=self.fp_bits)
+        
         for i, smi in enumerate(smiles_list):
             mol = Chem.MolFromSmiles(smi)
             if mol:
-                # Optimized conversion to numpy array
-                fp = AllChem.GetMorganFingerprintAsBitVect(mol, self.fp_radius, nBits=self.fp_bits)
-                arr = np.zeros((0,), dtype=np.int8)
-                DataStructs.ConvertToNumpyArray(fp, arr)
-                fps.append(arr)
+                # Optimized conversion to numpy array using new API
+                # GetFingerprintAsNumPy returns uint8 array, usually fine but let's check dtype
+                fp_array = mfgen.GetFingerprintAsNumPy(mol)
+                fps.append(fp_array)
                 valid_indices.append(i)
             else:
                 fps.append(np.zeros((self.fp_bits,), dtype=np.int8))
