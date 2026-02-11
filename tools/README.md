@@ -28,11 +28,6 @@ python tools/pubchem_scraper.py
 python tools/pubchem_scraper.py --target 1000
 ```
 
-**仅采集特定类别：**
-```bash
-python tools/pubchem_scraper.py --category "carboxylic acids"
-```
-
 **使用自定义配置文件：**
 ```bash
 python tools/pubchem_scraper.py --config my_config.yaml
@@ -61,12 +56,8 @@ api:
 ```yaml
 collection:
   target_count: 5000      # 目标化合物数量
+  annotation_heading: "Dissociation Constants" # 目标数据注解标题
   batch_size: 100         # 每批次大小
-  categories:             # 采集的化合物类别
-    - "carboxylic acids"
-    - "phenols"
-    - "amines"
-    # ... 更多类别
 ```
 
 ### 验证规则
@@ -149,17 +140,6 @@ Remove-Item data/raw/.checkpoint.json
 编辑 `tools/config.yaml`：
 
 ```yaml
-collection:
-  categories:
-    - "your_custom_category"
-    - "another_category"
-```
-
-### 2. 调整验证规则
-
-如果需要更宽松的验证：
-
-```yaml
 validation:
   pka_min: -5.0    # 扩大范围
   pka_max: 25.0
@@ -199,9 +179,9 @@ python main.py --data data/raw/pubchem_compounds.csv --n_jobs 4
 **解决**：
 - 检查RDKit安装
 - 临时关闭验证（不推荐）
-- 手动清理问题数据
-
-### 问题4：采集中断
+- 手动清理问目标注解（annotation_heading）下数据稀缺
+**解决**：
+- 确认注解标题是否正确（如 "Dissociation Constants"）
 **原因**：程序崩溃或手动停止  
 **解决**：
 - 直接重新运行，会自动从断点继续

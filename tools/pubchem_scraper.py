@@ -40,6 +40,7 @@ class PubChemAPI:
     
     def __init__(self, config: dict):
         self.base_url = config['api']['base_url']
+        self.view_url = config['api'].get('view_url', "https://pubchem.ncbi.nlm.nih.gov/rest/pug_view")
         self.requests_per_second = config['api']['requests_per_second']
         self.timeout = config['api']['timeout']
         self.max_retries = config['api']['max_retries']
@@ -84,99 +85,172 @@ class PubChemAPI:
                     logger.error(f"请求最终失败: {url}")
                     return None
     
-    def search_compounds(self, query: str, max_results: int = 100) -> List[int]:
+    def fetch_pka_annotations(self, heading: str = "Dissociation Constants", page: int = 1) -> List[Dict]:
         """
-        搜索化合物，返回CID列表
-        使用PubChem Compound搜索API
+        直接获取拥有特定Heading数据的化合物列表
+        使用 PUG View Annotations API
+        
+        API: https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/annotations/heading/{heading}/JSON
         
         Args:
-            query: 搜索关键词
-            max_results: 最大结果数
+            heading: 注解标题 (e.g. "Dissociation Constants")
+            page: 页码
             
         Returns:
-            化合物CID列表
+            包含CID和原始pKa文本的数据列表
+            [
+                {'cid': 123, 'pka_raw': '3.5 (at 25 C)', 'source': '...'},
+                ...
+            ]
         """
-        # 使用compound/fastformula或name搜索
-        # 对于化合物类别，使用不同的策略
-        url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{query}/cids/JSON"
+        # URL 编码 heading
+        import urllib.parse
+        heading_encoded = urllib.parse.quote(heading)
         
-        data = self._request(url)
-        if not data:
-            logger.warning(f"搜索失败: {query}")
-            return []
+        # PUG View Annotations API
+        url = f"{self.view_url}/annotations/heading/{heading_encoded}/JSON"
+        params = {
+            "heading_type": "Compound",
+            "page": page
+        }
         
-        try:
-            cids = data.get('IdentifierList', {}).get('CID', [])
-            return cids[:max_results]
-        except Exception as e:
-            logger.error(f"解析搜索结果失败: {e}")
-            return []
-    
-    def get_cids_by_random_sampling(self, start_cid: int, count: int, max_attempts: Optional[int] = None) -> List[int]:
-        """
-        通过随机采样获取CID列表（批量优化版）
+        data = self._request(url, params=params)
         
-        Args:
-            start_cid: 起始CID
-            count: 需要的CID数量
-            max_attempts: 最大尝试次数
+        results = []
+        if not data or 'Annotations' not in data:
+            return results
             
-        Returns:
-            有效的CID列表
-        """
-        import random
+        annotations = data['Annotations'].get('Annotation', [])
         
-        if max_attempts is None:
-            max_attempts = count * 10  # 增加尝试次数预算，因为批量处理很快
-        
-        cids = []
-        attempts = 0
-        current_cid = start_cid
-        batch_check_size = 50  # 每次批量验证50个ID
-        
-        # 使用tqdm显示随机采样进度
-        with tqdm(total=count, desc=f"随机采样 (起始CID {start_cid})", unit="个") as pbar:
-            while len(cids) < count and attempts < max_attempts:
-                # 1. 生成一批候选CID
-                batch_candidates = []
-                for _ in range(batch_check_size):
-                    # 随机跳跃
-                    step = random.randint(1, 50)
-                    current_cid += step
-                    batch_candidates.append(current_cid)
+        for anno in annotations:
+            try:
+                # 获取CID
+                cid = anno.get('LinkedRecords', {}).get('CID', [None])[0]
+                if not cid:
+                    continue
                 
-                # 2. 批量验证CID有效性 (一次请求验证50个)
-                # 请求MolecularFormula比完整记录更轻量
-                cid_str = ",".join(map(str, batch_candidates))
-                url = f"{self.base_url}/compound/cid/{cid_str}/property/MolecularFormula/JSON"
-                
-                try:
-                    data = self._request(url)
+                # 获取数据值
+                data_list = anno.get('Data', [])
+                for item in data_list:
+                    # 提取文本值
+                    val_obj = item.get('Value', {})
+                    string_val = ""
                     
-                    # 3. 处理有效结果
-                    if data and 'PropertyTable' in data:
-                        valid_props = data['PropertyTable']['Properties']
-                        for prop in valid_props:
-                            valid_cid = prop.get('CID')
-                            if valid_cid:
-                                cids.append(valid_cid)
-                                pbar.update(1)
-                                if len(cids) >= count:
-                                    break
-                except Exception as e:
-                    # 批量请求失败可能是因为某个ID异常，忽略本次批量
-                    pass
+                    if 'StringWithMarkup' in val_obj:
+                        string_val = val_obj['StringWithMarkup'][0].get('String', '')
+                    elif 'Number' in val_obj:
+                        string_val = str(val_obj['Number'][0])
+                    
+                    if not string_val:
+                        continue
+                        
+                    results.append({
+                        'cid': cid,
+                        'pka_raw': string_val,
+                        'source': anno.get('SourceName', 'Unknown')
+                    })
+                    
+            except Exception as e:
+                logger.debug(f"解析注解失败: {e}")
+                continue
                 
-                attempts += batch_check_size
-                pbar.set_postfix({"尝试": attempts, "命中": len(cids)})
-                
-                # 每500次尝试更新一次描述
-                if attempts % 500 == 0:
-                    pbar.set_description(f"随机采样 (当前CID {current_cid})")
-        
-        return cids[:count]
+        return results
     
+
+    def extract_pka_values(self, raw_text: str) -> List[float]:
+        """从原始文本中提取 pKa 数值（增强版）
+
+        支持多种格式：
+        - 单个值: "pKa = 4.5", "3.5 (at 25 C)"
+        - 多值列表: "pKa: 2.1, 3.4; 5.0"
+        - 范围: "3.5 - 3.7", "3.5 to 3.7", 使用平均值表示
+        - 不同破折号/Unicode 连字符（– —）
+        - 科学计数法
+        会尝试排除显然不合理的数字（非常大的整数等）。最终返回去重后的浮点列表。
+        """
+        import re
+        if not raw_text:
+            return []
+
+        text = raw_text
+        # 规范化空白与破折号
+        if '\u2013' in text or '\u2014' in text:
+            text = text.replace('\u2013', '-').replace('\u2014', '-')
+        text = text.replace('\u00A0', ' ')
+        text = text.replace('\xb0', ' ').strip()
+
+        pka_values: List[float] = []
+
+        # 1) 提取带范围的表达: "3.5 - 3.7", "3.5 to 3.7"
+        range_regex = re.compile(r'([-+]?\d+\.?\d*(?:[eE][-+]?\d+)?)\s*(?:-|–|—|to)\s*([-+]?\d+\.?\d*(?:[eE][-+]?\d+)?)', re.IGNORECASE)
+        for m in range_regex.findall(text):
+            try:
+                a = float(m[0])
+                b = float(m[1])
+                avg = (a + b) / 2.0
+                pka_values.append(avg)
+            except Exception:
+                pass
+
+        # 2) 优先查找明确标注 pKa 的上下文数字
+        # 捕获类似 "pKa = 4.5", "pKa: 4.5, 5.6", "pKa 4.5"
+        pka_block_regex = re.compile(r'pKa[^0-9A-Za-z\-\+]*(?:[:=~])?\s*([\d\.,;\s\-to–—eE\+\-]+)', re.IGNORECASE)
+        pka_blocks = pka_block_regex.findall(text)
+        for block in pka_blocks:
+            # split by common separators
+            parts = re.split(r'[;,/\s]+', block)
+            for part in parts:
+                part = part.strip()
+                if not part:
+                    continue
+                try:
+                    # avoid stray non-numeric tokens
+                    if re.match(r'^[-+]?\d+\.?\d*(?:[eE][-+]?\d+)?$', part):
+                        pka_values.append(float(part))
+                except:
+                    pass
+
+        # 3) 查找文中独立数字（当全文非常短或数字上下文像 pKa/dissociation）
+        # 如果文本包含温度标注 (如 "25 C")，先移除以避免误识别
+        text_no_temp = re.sub(r'\bat\s*\d+\b', '', text, flags=re.IGNORECASE)
+        text_no_temp = re.sub(r'\b\d+\s*(?:°|º)?\s*[cC]\b', '', text_no_temp)
+
+        # 如果文本很短（<=30 chars）并且是数字序列，直接接受
+        if len(text_no_temp) <= 30 and re.match(r'^[-+]?\d+\.?\d*(?:[eE][-+]?\d+)?(?:[;,\s]+[-+]?\d+\.?\d*)*$', text_no_temp.strip()):
+            for num in re.split(r'[;,\s]+', text_no_temp.strip()):
+                try:
+                    pka_values.append(float(num))
+                except:
+                    pass
+
+        # 4) 作为兜底，从全文中抓取所有浮点数字，但谨慎过滤：
+        if not pka_values:
+            # 兜底提取时使用去温度后的文本
+            candidates = re.findall(r'[-+]?\d+\.?\d*(?:[eE][-+]?\d+)?', text_no_temp)
+            for c in candidates:
+                try:
+                    val = float(c)
+                    # 过滤过大或过小的数值（非 pKa 范围）
+                    if abs(val) < 100.0:
+                        pka_values.append(val)
+                except:
+                    pass
+
+        # 去重并按合理值筛选（-10 ~ 50 的宽阈值，后续 DataValidator 会更严格）
+        cleaned = []
+        for v in set(pka_values):
+            if v is None:
+                continue
+            if v != v:
+                continue
+            if v < -10 or v > 50:
+                continue
+            cleaned.append(float(v))
+
+        return sorted(cleaned)
+
     def get_compound_properties(self, cids: List[int]) -> Dict[int, Dict]:
+
         """
         批量获取化合物基本属性
         
@@ -223,159 +297,6 @@ class PubChemAPI:
         except Exception as e:
             logger.error(f"解析化合物属性失败: {e}")
             
-        return results
-    
-    def get_pka_data(self, cid: int) -> Optional[List[float]]:
-        """
-        获取化合物的pKa数据
-        
-        尝试多个数据源：
-        1. PubChem实验数据
-        2. 化合物描述中的pKa信息
-        
-        Args:
-            cid: 化合物CID
-            
-        Returns:
-            pKa值列表（可能有多个）
-        """
-        # 方法1: 从属性中获取 (使用 PUG View API)
-        url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/{cid}/JSON"
-        data = self._request(url)
-        
-        pka_values = []
-        
-        if data and 'Record' in data:
-            try:
-                record = data['Record']
-                
-                # 查找Section中的pKa信息
-                sections = record.get('Section', [])
-                for section in sections:
-                    pka_values.extend(self._extract_pka_from_section(section))
-                
-            except Exception as e:
-                logger.debug(f"从记录中提取pKa失败 (CID: {cid}): {e}")
-        
-        return list(set(pka_values)) if pka_values else None
-    
-    def _extract_pka_from_section(self, section: dict) -> List[float]:
-        """从section中递归提取pKa值"""
-        import re
-        pka_values = []
-        
-        # 检查TOCHeading
-        heading = section.get('TOCHeading', '').lower()
-        if 'pka' in heading or 'dissociation' in heading:
-            # 查找Information字段
-            info_list = section.get('Information', [])
-            for info in info_list:
-                # 查找Value字段
-                value = info.get('Value', {})
-                if isinstance(value, dict):
-                    string_val = value.get('StringWithMarkup', [{}])[0].get('String', '')
-                    
-                    # 1. 尝试匹配范围 (e.g. "3.5 - 3.7")
-                    range_matches = re.findall(r'pKa.*?(\d+\.?\d*)\s*-\s*(\d+\.?\d*)', string_val, re.IGNORECASE)
-                    for start, end in range_matches:
-                        try:
-                            avg = (float(start) + float(end)) / 2
-                            pka_values.append(avg)
-                        except ValueError:
-                            pass
-                    
-                    # 2. 尝试匹配单个值
-                    # 使用正则提取数字
-                    matches = re.findall(r'pKa\s*[=:~]?\s*(-?\d+\.?\d*)', string_val, re.IGNORECASE)
-                    for match in matches:
-                        try:
-                            val = float(match)
-                            pka_values.append(val)
-                        except ValueError:
-                            pass
-        
-        # 递归检查子section
-        subsections = section.get('Section', [])
-        for subsection in subsections:
-            pka_values.extend(self._extract_pka_from_section(subsection))
-        
-        return list(set(pka_values))
-
-    def get_pka_data_batch(self, cids: List[int]) -> Dict[int, List[float]]:
-        """
-        批量获取化合物的pKa数据 (优化版)
-        使用Annotations API一次性查询多个CID
-        
-        Args:
-            cids: 化合物CID列表
-            
-        Returns:
-            字典映射 {cid: [pka_values]}
-        """
-        results = {}
-        if not cids:
-            return results
-            
-        # PubChem Annotations API 限制每次查询数量，分批处理
-        batch_size = 50
-        
-        for i in range(0, len(cids), batch_size):
-            batch_cids = cids[i:i+batch_size]
-            cid_str = ",".join(map(str, batch_cids))
-            
-            # 使用Annotations API查询Dissociation Constants
-            # 改用POST方法，避免URL过长导致的400错误
-            # 注意：PubChem PUG REST POST请求通常需要将参数放在body中，或者是multipart/form-data
-            # 对于Annotations API，GET通常够用，但如果CID太多还是POST稳妥
-            # 实际上，PubChem Annotations API的GET限制较宽松，但为了保险，我们先尝试减小batch_size
-            # 如果还是报错，说明可能API变动。
-            # 另一种策略：对于400错误，可能是因为没有找到数据。
-            
-            url = f"{self.base_url}/annotations/heading/Dissociation%20Constants/data/JSON"
-            params = {'cid': cid_str}
-            
-            # 尝试请求
-            data = self._request(url, params=params)
-            
-            if data and 'Annotations' in data:
-                annotations = data['Annotations']['Annotation']
-                for anno in annotations:
-                    cid = anno.get('LinkedRecords', {}).get('CID', [None])[0]
-                    if not cid:
-                        continue
-                        
-                    pka_values = []
-                    # 提取数据
-                    for item in anno.get('Data', []):
-                        val_obj = item.get('Value', {})
-                        string_val = val_obj.get('StringWithMarkup', [{}])[0].get('String', '')
-                        if not string_val:
-                            continue
-                            
-                        # 解析pKa值 (复用之前的正则逻辑)
-                        import re
-                        # 1. 尝试匹配范围
-                        range_matches = re.findall(r'pKa.*?(\d+\.?\d*)\s*-\s*(\d+\.?\d*)', string_val, re.IGNORECASE)
-                        for start, end in range_matches:
-                            try:
-                                avg = (float(start) + float(end)) / 2
-                                pka_values.append(avg)
-                            except ValueError:
-                                pass
-                        
-                        # 2. 尝试匹配单个值
-                        if not range_matches:
-                            matches = re.findall(r'pKa\s*[=:~]?\s*(-?\d+\.?\d*)', string_val, re.IGNORECASE)
-                            for match in matches:
-                                try:
-                                    val = float(match)
-                                    pka_values.append(val)
-                                except ValueError:
-                                    pass
-                                    
-                    if pka_values:
-                        results[cid] = list(set(pka_values))
-        
         return results
 
 
@@ -523,267 +444,132 @@ class PubChemScraper:
         except Exception as e:
             logger.error(f"保存中间结果失败: {e}")
 
-    def _get_known_pka_compounds(self) -> List[int]:
+    def collect_from_category(self, category: Optional[str] = None, max_compounds: int = 100) -> int:
         """
-        返回已知含有pKa数据的化合物CID列表
-        这些是常见的有机酸、碱和药物分子
-        """
-        known_cids = []
-        
-        # 1. 羧酸类 (pKa ~2-5)
-        carboxylic_acids = [
-            176,      # 乙酸 pKa 4.76
-            264,      # 甲酸 pKa 3.75
-            338,      # 丙酸 pKa 4.87
-            1031,     # 丁酸 pKa 4.82
-            7991,     # 戊酸 pKa 4.83
-            8892,     # 己酸 pKa 4.85
-            243,      # 苯甲酸 pKa 4.20
-            445858,   # 水杨酸 pKa 2.97
-            1060,     # 邻苯二甲酸 pKa 2.89
-            10313,    # 草酸 pKa 1.25
-            311,      # 琥珀酸 pKa 4.21
-            1110,     # 马来酸 pKa 1.92
-            444972,   # 富马酸 pKa 3.03
-        ]
-        known_cids.extend(carboxylic_acids)
-        
-        # 2. 酚类 (pKa ~8-11)
-        phenols = [
-            996,      # 苯酚 pKa 9.95
-            135,      # 对甲酚 pKa 10.26
-            7150,     # 间甲酚 pKa 10.09
-            2879,     # 邻甲酚 pKa 10.28
-            7342,     # 对硝基苯酚 pKa 7.15
-            2394,     # 间硝基苯酚 pKa 8.35
-            1970,     # 邻硝基苯酚 pKa 7.23
-            6998,     # 儿茶酚 pKa 9.34
-            289,      # 氢醌 pKa 9.85
-            7054,     # 对氨基苯酚 pKa 10.30
-        ]
-        known_cids.extend(phenols)
-        
-        # 3. 胺类 (pKa ~9-11)
-        amines = [
-            6267,     # 乙胺 pKa 10.7
-            6537,     # 二乙胺 pKa 10.9
-            6115,     # 苯胺 pKa 4.6
-            7515,     # 甲胺 pKa 10.6
-            9270,     # 正丙胺 pKa 10.5
-            7712,     # 吡啶 pKa 5.2
-            1049,     # 吡啶 pKa 5.25
-            8082,     # 咪唑 pKa 6.95
-            795,      # 咪唑 pKa 7.0
-            8248,     # 哌啶 pKa 11.1
-            8252,     # 吗啉 pKa 8.5
-        ]
-        known_cids.extend(amines)
-        
-        # 4. 氨基酸类 (pKa ~2-10)
-        amino_acids = [
-            5950,     # L-丙氨酸 pKa 2.34, 9.69
-            6137,     # 甘氨酸 pKa 2.34, 9.60
-            6287,     # L-缬氨酸 pKa 2.32, 9.62
-            6306,     # L-亮氨酸 pKa 2.36, 9.60
-            6322,     # L-异亮氨酸 pKa 2.36, 9.68
-            6274,     # L-苯丙氨酸 pKa 1.83, 9.13
-            6305,     # L-色氨酸 pKa 2.38, 9.39
-            6288,     # L-蛋氨酸 pKa 2.28, 9.21
-            5960,     # L-脯氨酸 pKa 1.99, 10.60
-            750,      # L-谷氨酸 pKa 2.19, 4.25, 9.67
-            5961,     # L-天冬氨酸 pKa 1.88, 3.65, 9.60
-            6106,     # L-赖氨酸 pKa 2.18, 8.95, 10.53
-            6140,     # L-精氨酸 pKa 2.17, 9.04, 12.48
-        ]
-        known_cids.extend(amino_acids)
-        
-        # 5. 药物分子
-        drugs = [
-            2244,     # 阿司匹林 pKa 3.5
-            3672,     # 布洛芬 pKa 4.91
-            60823,    # 萘普生 pKa 4.15
-            2519,     # 咖啡因 pKa 10.4
-            3825,     # 尼古丁 pKa 8.0
-            4409,     # 吗啡 pKa 8.0
-            2585,     # 可待因 pKa 8.2
-            3345,     # 扑热息痛 pKa 9.5
-            4754,     # 苯巴比妥 pKa 7.4
-            2157,     # 水杨酸钠 pKa 2.97
-        ]
-        known_cids.extend(drugs)
-        
-        # 6. 杂环化合物
-        heterocycles = [
-            1174,     # 吡咯 pKa 17.5
-            9253,     # 吲哚 pKa 16.97
-            1140,     # 呋喃
-            8030,     # 噻吩
-            1049,     # 吡啶 pKa 5.25
-            9246,     # 喹啉 pKa 4.9
-            8580,     # 异喹啉 pKa 5.4
-        ]
-        known_cids.extend(heterocycles)
-        
-        # 7. 其他重要化合物
-        others = [
-            962,      # 水 pKa 15.7
-            1118,     # 硫酸 pKa -3
-            313,      # 磷酸 pKa 2.15
-            1032,     # 碳酸 pKa 6.35
-            284,      # 氨 pKa 9.25
-            1031,     # 硼酸 pKa 9.24
-        ]
-        known_cids.extend(others)
-        
-        return list(set(known_cids))
+        基于 Annotation 的 pKa 采集（重构后的实现）
 
-    def collect_from_category(self, category: str, max_compounds: int = 100) -> int:
-        """
-        从特定化合物类别采集数据
-        
+        逻辑：分页遍历 PubChem 注解（heading），解析 pKa 文本 -> 汇总 CID -> 批量获取属性 -> 验证并保存。
+
         Args:
-            category: 化合物类别
-            max_compounds: 最大采集数量
-            
+            category: 占位参数（兼容旧接口），实际使用配置中的 `annotation_heading`。
+            max_compounds: 本次采集的最大化合物数量
+
         Returns:
             成功采集的化合物数量
         """
-        logger.info(f"开始采集类别: {category}")
-        
-        # 1. 尝试使用搜索策略 (忽略失败)
-        cids = []
-        try:
-             search_result = self.api.search_compounds(category, max_results=max_compounds * 3)
-             cids.extend(search_result)
-        except:
-             pass
-        
-        # 2. 如果搜索结果少，使用随机采样策略
-        if len(cids) < max_compounds:
-            category_ranges = {
-                "carboxylic acids": (176, 10000),      # 从乙酸开始
-                "phenols": (996, 20000),               # 从苯酚开始
-                "amines": (6267, 30000),               # 从乙胺开始
-                "amino acids": (5950, 15000),          # 从丙氨酸开始
-                "pharmaceuticals": (2244, 50000),      # 从阿司匹林开始
-                "benzoic acids": (243, 25000),         # 从苯甲酸开始
-                "anilines": (6115, 35000),             # 从苯胺开始
-                "pyridines": (1049, 40000),            # 从吡啶开始
-                "imidazoles": (795, 45000),            # 从咪唑开始
-                "thiols": (6970, 30000),               # 从乙硫醇开始
-            }
-            if category in category_ranges:
-                start_cid, end_cid = category_ranges[category]
-                logger.info(f"使用随机采样策略补充数据，范围: {start_cid} - {end_cid}")
-                # 增加采样数量
-                random_cids = self.api.get_cids_by_random_sampling(start_cid, max_compounds * 10)
-                cids.extend(random_cids)
-        
-        # 3. 添加已知化合物列表
-        logger.info(f"添加已知化合物列表作为补充")
-        cids.extend(self._get_known_pka_compounds())
+        heading = self.config['collection'].get('annotation_heading', 'Dissociation Constants')
+        page_size = self.config['collection'].get('page_size', 1000)
+        batch_size = self.config['collection'].get('batch_size', 100)
 
-        # 去重
-        cids = list(set(cids))
-        logger.info(f"准备处理 {len(cids)} 个候选化合物CID")
-        
+        logger.info(f"开始基于注解采集: heading={heading}, 目标={max_compounds}")
+
         collected_count = 0
-        batch_size = 50 # 增大批次以利用批量API优势
-        
-        with tqdm(total=len(cids), desc=f"采集 {category}") as pbar:
-            for i in range(0, len(cids), batch_size):
-                batch_cids = cids[i:i+batch_size]
-                
-                # 过滤已采集CID
-                target_cids = [cid for cid in batch_cids if cid not in self.collected_cids]
-                
-                if not target_cids:
-                    pbar.update(len(batch_cids))
+        page = 1
+
+        # 按页遍历注解，直到达到目标或无更多数据
+        while collected_count < max_compounds:
+            annotations = self.api.fetch_pka_annotations(heading=heading, page=page)
+            if not annotations:
+                logger.info(f"第 {page} 页无注解，停止。")
+                break
+
+            # 收集本页所有有 pKa 的 CID，并保留原始文本
+            cid_to_text: Dict[int, List[str]] = {}
+            for anno in annotations:
+                cid = anno.get('cid')
+                if not cid or cid in self.collected_cids:
                     continue
-                
-                # 关键优化：先批量查询pKa，再查属性！
-                # 这样可以过滤掉绝大多数没有pKa数据的化合物，无需查询它们的SMILES
-                pka_map = self.api.get_pka_data_batch(target_cids)
-                
-                # 只有不仅SMILES还需要pKa的才继续处理
-                cids_with_pka = list(pka_map.keys())
-                
-                if not cids_with_pka:
-                    pbar.update(len(batch_cids))
+
+                raw = anno.get('pka_raw', '')
+                vals = self.api.extract_pka_values(raw)
+                if not vals:
                     continue
-                    
-                # 批量获取这些有pKa数据的化合物的属性
-                props_map = self.api.get_compound_properties(cids_with_pka)
-                
-                for cid in cids_with_pka:
+
+                cid_to_text.setdefault(cid, []).append(raw)
+
+            if not cid_to_text:
+                page += 1
+                continue
+
+            cids_page = list(cid_to_text.keys())
+
+            # 批量分块获取属性
+            for i in range(0, len(cids_page), batch_size):
+                batch_cids = cids_page[i:i+batch_size]
+                props_map = self.api.get_compound_properties(batch_cids)
+
+                for cid in batch_cids:
                     if cid not in props_map:
                         continue
-                        
+
                     props = props_map[cid]
-                    smiles = props['smiles']
-                    pka_values = pka_map[cid]
-                    
+                    smiles = props.get('smiles', '')
+                    # 合并同一CID所有原始文本，再从每段文本提取 pKa 值
+                    raw_texts = cid_to_text.get(cid, [])
+                    pka_values = []
+                    for rt in raw_texts:
+                        pka_values.extend(self.api.extract_pka_values(rt))
+                    pka_values = list(set(pka_values))
+
+                    if not pka_values:
+                        continue
+
                     # 全局SMILES去重
                     if self.config['advanced']['filter_duplicates'] and smiles in self.collected_smiles:
                         continue
-                    
-                    # 记录所有pKa值供参考
+
                     pka_all_str = ";".join(map(str, pka_values))
-                    
-                    # 遍历每个pKa值，创建独立记录
+
                     for idx, pka in enumerate(pka_values):
-                        # 构建化合物数据
                         compound = {
                             'id': f"pubchem_{cid}_{idx}",
                             'cid': cid,
                             'smiles': smiles,
                             'pka': pka,
                             'pka_all': pka_all_str,
-                            'compound_name': props['compound_name'],
-                            'molecular_formula': props['molecular_formula'],
-                            'molecular_weight': props['molecular_weight'],
-                            'iupac_name': props['iupac_name'],
-                            'source': f"PubChem_{category}",
+                            'compound_name': props.get('compound_name', ''),
+                            'molecular_formula': props.get('molecular_formula', ''),
+                            'molecular_weight': props.get('molecular_weight', 0.0),
+                            'iupac_name': props.get('iupac_name', ''),
+                            'source': f"PubChem_Annotation",
                             'initial_charge': 0,
                             'uhf': 0
                         }
-                        
-                        # 验证数据
+
                         is_valid, error_msg = self.validator.validate_compound(compound)
                         if not is_valid:
-                            # logger.debug(f"化合物验证失败 (CID: {cid}): {error_msg}")
                             continue
-                        
-                        # 添加到结果
+
                         self.compounds.append(compound)
-                    
-                    # 标记为已采集
+
                     self.collected_cids.add(cid)
-                    self.collected_smiles.add(smiles)
+                    if smiles:
+                        self.collected_smiles.add(smiles)
                     collected_count += 1
-                
-                # 更新进度条
-                pbar.update(len(batch_cids))
-                pbar.set_postfix({"有效": collected_count})
-                    
-                # 定期保存
-                if collected_count > 0 and collected_count % self.config['output']['checkpoint_frequency'] == 0:
-                    self._save_intermediate_results()
-                    self._save_checkpoint()
-                
-                # 检查是否达到目标
+
+                    # 定期保存
+                    if collected_count > 0 and collected_count % self.config['output']['checkpoint_frequency'] == 0:
+                        self._save_intermediate_results()
+                        self._save_checkpoint()
+
+                    if collected_count >= max_compounds:
+                        break
+
                 if collected_count >= max_compounds:
                     break
-                
-                if collected_count >= max_compounds:
-                    break
-        
-        # 保存剩余数据
-        if self.compounds:
-            self._save_intermediate_results()
-            self._save_checkpoint()
-        
-        logger.info(f"类别 {category} 采集完成，成功采集 {collected_count} 个化合物")
+
+            # 保存本页结果后继续下一页
+            if self.compounds:
+                self._save_intermediate_results()
+                self._save_checkpoint()
+
+            # 如果本页结果数量少于 page_size，说明已到末页
+            if len(annotations) < page_size:
+                break
+
+            page += 1
+
+        logger.info(f"注解采集完成，成功采集 {collected_count} 个化合物")
         return collected_count
     
     def run(self):
@@ -793,21 +579,14 @@ class PubChemScraper:
         logger.info("=" * 60)
         
         target_count = self.config['collection']['target_count']
-        categories = self.config['collection']['categories']
-        
         total_collected = len(self.collected_cids)
-        
-        # 计算每个类别应采集的数量
-        per_category = (target_count - total_collected) // len(categories) + 1
-        
-        for category in categories:
-            if total_collected >= target_count:
-                logger.info(f"已达到目标数量 {target_count}，停止采集")
-                break
-            
-            count = self.collect_from_category(category, max_compounds=per_category)
+
+        remaining = max(0, target_count - total_collected)
+        if remaining <= 0:
+            logger.info(f"已达到目标数量 {target_count}，停止采集")
+        else:
+            count = self.collect_from_category(category=None, max_compounds=remaining)
             total_collected += count
-            
             logger.info(f"当前总计: {total_collected}/{target_count}")
         
         logger.info("=" * 60)
@@ -821,7 +600,7 @@ def main():
     parser = argparse.ArgumentParser(description="PubChem化合物数据采集工具")
     parser.add_argument("--config", type=str, default="tools/config.yaml", help="配置文件路径")
     parser.add_argument("--target", type=int, help="目标采集数量（覆盖配置文件）")
-    parser.add_argument("--category", type=str, help="指定单一类别进行采集")
+    # `--category` 参数已移除；采集改为基于 PubChem 注解（Dissociation Constants）
     
     args = parser.parse_args()
     
@@ -832,11 +611,8 @@ def main():
     if args.target:
         scraper.config['collection']['target_count'] = args.target
     
-    # 运行采集
-    if args.category:
-        scraper.collect_from_category(args.category, max_compounds=100)
-    else:
-        scraper.run()
+    # 运行采集（基于注解）
+    scraper.run()
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 # API设置
 api:
   base_url: "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
+  view_url: "https://pubchem.ncbi.nlm.nih.gov/rest/pug_view"
   requests_per_second: 5  # PubChem官方限制
   timeout: 30  # 请求超时时间（秒）
   max_retries: 3  # 最大重试次数
@@ -13,28 +14,12 @@ collection:
   # 目标化合物数量
   target_count: 5000
   
-  # 每批次采集数量
+  # 注解API设置
+  annotation_heading: "Dissociation Constants"
+  page_size: 1000  # 每页获取的注解数量 (PubChem分页)
+  
+  # 批量查询属性时的批次大小
   batch_size: 100
-  
-  # 采集化合物类别（优先包含pKa数据的类别）
-  categories:
-    - "carboxylic acids"
-    - "phenols"
-    - "amines"
-    - "amino acids"
-    - "pharmaceuticals"
-    - "benzoic acids"
-    - "anilines"
-    - "pyridines"
-    - "imidazoles"
-    - "thiols"
-  
-  # pKa搜索关键词
-  pka_keywords:
-    - "pKa"
-    - "dissociation constant"
-    - "acid dissociation"
-    - "ionization constant"
 
 # 数据验证规则
 validation:
