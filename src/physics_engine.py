@@ -58,11 +58,12 @@ class PhysicsEngine:
         
         abs_xyz_path = os.path.abspath(xyz_file)
         
-        # Command: xtb <file> --opt --alpb water --chrg <charge> --uhf <uhf>
+        # Command: xtb <file> --opt loose --alpb water --chrg <charge> --uhf <uhf>
+        # --opt loose: relaxed convergence criteria, ~2-3x faster than normal with minimal pKa accuracy loss
         cmd = [
             self.xtb_path,
             abs_xyz_path,
-            "--opt",
+            "--opt", "loose",
             "--alpb", "water",
             "--chrg", str(charge),
             "--uhf", str(uhf)

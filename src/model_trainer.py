@@ -32,7 +32,8 @@ class ModelTrainer:
             learning_rate=0.05,
             max_depth=6,
             n_jobs=-1,
-            random_state=42
+            random_state=42,
+            device='cuda'
         )
         self.scaler = StandardScaler()
 

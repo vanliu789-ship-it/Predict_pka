@@ -155,12 +155,12 @@ def main():
     if len(df_to_process) == 0:
         logger.info("All molecules already processed!")
         if df_existing is not None:
-            processed_data = cast(List[Dict[str, Any]], df_existing.to_dict('records')) # Load all for training
+            processed_data = cast(List[Dict[str, Any]], df_existing.to_dict(orient='records'))  # type: ignore[call-overload]
         else:
             logger.error("Unexpected state: All molecules processed but no existing data found.")
             return
     else:
-        data_records = df_to_process.to_dict('records')
+        data_records = df_to_process.to_dict(orient='records')  # type: ignore[call-overload]
         logger.info(f"Processing {len(data_records)} new molecules (Total: {len(df)}).")
 
         # 2. Parallel Processing

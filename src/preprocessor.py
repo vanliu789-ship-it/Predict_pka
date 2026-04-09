@@ -26,6 +26,11 @@ def _process_single_wrapper(args):
     # Re-instantiate locally to avoid pickling RDKit C++ objects if they are problematic
     # But this is expensive. Let's try to see if we can just do the work here.
     
+    # Cache: skip if XYZ already exists
+    file_path = os.path.join(output_dir, f"{mol_id}.xyz")
+    if os.path.exists(file_path):
+        return file_path
+
     try:
         # 1. Convert SMILES
         mol = Chem.MolFromSmiles(smiles)
