@@ -1,4 +1,5 @@
 import os
+import shutil
 import argparse
 import pandas as pd
 import logging
@@ -25,6 +26,33 @@ logger = logging.getLogger(__name__)
 # Global variables for worker processes (Lazy Loading)
 _preprocessor = None
 _physics_engine = None
+
+def clean_temp_data(output_dir: str, xtb_dir: str, processed_file: str) -> None:
+    """
+    Delete temporary data from the previous calculation run.
+
+    Removes:
+      - xtb working directories (temp/)
+      - 3D structure .xyz files (data/interim/structures/)
+      - processed features CSV (data/processed/features.csv)
+    """
+    targets = [
+        (xtb_dir, "xtb working directory"),
+        (output_dir, "3D structure directory"),
+    ]
+    for path, desc in targets:
+        if os.path.exists(path):
+            shutil.rmtree(path)
+            logger.info(f"Cleaned {desc}: {path}")
+        else:
+            logger.info(f"Skip (not found) {desc}: {path}")
+
+    if os.path.exists(processed_file):
+        os.remove(processed_file)
+        logger.info(f"Cleaned processed features: {processed_file}")
+    else:
+        logger.info(f"Skip (not found) processed features: {processed_file}")
+
 
 def init_worker(output_dir, xtb_work_dir):
     """
@@ -91,8 +119,13 @@ def main():
     parser.add_argument("--processed_file", type=str, default="data/processed/features.csv", help="Path to save processed features")
     parser.add_argument("--model_path", type=str, default="models/pka_model_v1.joblib", help="Path to save trained model")
     parser.add_argument("--chunk_size", type=int, default=50, help="Number of molecules to save at once (checkpointing)")
-    
+    parser.add_argument("--clean", action="store_true", help="Delete temporary data from the previous run before starting")
+
     args = parser.parse_args()
+
+    if args.clean:
+        logger.info("--clean flag set: removing previous temporary data...")
+        clean_temp_data(args.output_dir, args.xtb_dir, args.processed_file)
     
     # 1. Load Data
     if not os.path.exists(args.data):
